@@ -1,1 +1,1 @@
-# interface to call C from Python
+from ctypes import *

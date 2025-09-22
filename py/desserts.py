@@ -1,1 +1,1 @@
-# dessert-specific parameters
+desserts = {}
