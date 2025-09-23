@@ -1,5 +1,9 @@
 import numpy as np, os
-def compute_metrics(name, results, outdir="../tables"):
+
+HERE = os.path.dirname(__file__)
+OUTDIR = os.path.abspath(os.path.join(HERE, "..", "tables"))
+
+def compute_metrics(name, results, outdir=OUTDIR):
     t, G, I = results["t"], results["G"], results["I"]
     dt = t[1]-t[0]
     Gb = G[0]

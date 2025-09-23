@@ -1,7 +1,10 @@
 import os
 import matplotlib.pyplot as plt
 
-def plot_results(name, results, outdir="../figures"):
+HERE = os.path.dirname(__file__)
+OUTDIR = os.path.abspath(os.path.join(HERE, "..", "figures"))
+
+def plot_results(name, results, outdir=OUTDIR):
     os.makedirs(outdir, exist_ok=True)
     t, G, I = results["t"], results["G"], results["I"]
 
