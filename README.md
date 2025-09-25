@@ -15,7 +15,7 @@ C/               # C RK4 solver (exports simulate)
   └─ Makefile
 py/              # Python orchestration
   ├─ run_all.py  # runs all desserts → figures/ + tables/
-  ├─ interface.py  # ctypes bridge + Python RK4 fallback
+  ├─ interface.py  # ctypes bridge into C solver
   ├─ desserts.py   # A,k per dessert
   ├─ metrics.py    # peaks, AUCs
   └─ plotting.py   # saves PNGs into ../figures
@@ -32,7 +32,7 @@ README.md
 ## Requirements
 
 * Python 3.10+
-* `numpy`, `matplotlib`, `pyyaml` (installed below)
+* `numpy`, `matplotlib`, `pyyaml`, `scipy`, `pytest` (installed below)
 * Optional C build: **gcc** (MSYS2 MinGW64 on Windows) or any C11 compiler
 
 ---
@@ -45,15 +45,10 @@ README.md
 ```bash
 pip install -r requirements.txt
 make -C C
+python -m py.run_all
 ```
 
-Then in the terminal:
-
-```bash
-python py/run_all.py
-```
-
-Results: `figures/*.png`, `tables/summary.csv`.
+Results: `figures/*.png`, `figures/*_overlay.png`, `tables/summary.csv`.
 
 ---
 
@@ -90,12 +85,12 @@ make -C C
 ### 3) Run
 
 ```powershell
-py py\run_all.py
+py -m py.run_all
 ```
 
 Outputs appear in `figures\` and `tables\`.
 
-> No C compiler? The Python RK4 fallback runs automatically (slower but fine).
+> No C compiler? Install gcc/clang (see above) or reuse a prebuilt `C/libmodel.so` / `C/model.dll`; the pipeline requires the shared library.
 
 ---
 
@@ -104,7 +99,7 @@ Outputs appear in `figures\` and `tables\`.
 From repo root (venv active):
 
 ```bash
-python py/run_all.py
+python -m py.run_all
 ```
 
 ---
@@ -148,19 +143,27 @@ desserts = {
 
 * `figures/<dessert>_glucose.png`
 * `figures/<dessert>_insulin.png`
-* `tables/summary.csv` with:
+* `figures/glucose_overlay.png`
+* `figures/insulin_overlay.png`
+* `tables/summary.csv` with dessert-level metrics (peaks, peak times, AUCs)
+  feeding the Results/Discussion tables.
 
-  ```
-  dessert,peak_G(t0 units),t_peak_G(min),AUC_G,peak_I,t_peak_I(min),AUC_I
-  ...
-  ```
+---
+
+## Testing
+
+Run the fast sanity suite (after building the shared library):
+
+```bash
+pytest
+```
 
 ---
 
 ## How it works (brief)
 
 * C exports `simulate(G,I,nsteps,dt,Params*)` (fixed-step RK4).
-* Python loads `C/model.dll` or `C/libmodel.so` via `ctypes`; if not found, uses a NumPy RK4 fallback.
+* Python loads `C/model.dll` or `C/libmodel.so` via `ctypes` and streams results back to NumPy.
 * `run_all.py` iterates desserts → runs sim → saves plots & metrics.
 
 ---
@@ -171,7 +174,7 @@ desserts = {
 Ensure `py/plotting.py` and `py/metrics.py` use repo-relative paths (already fixed). Run from repo root:
 
 ```bash
-python py/run_all.py
+python -m py.run_all
 ```
 
 **`make: command not found` (Windows)**

@@ -1,3 +1,5 @@
-﻿numpy
+numpy
 matplotlib
 pyyaml
+scipy
+pytest

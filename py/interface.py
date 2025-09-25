@@ -1,70 +1,103 @@
-import os, sys
-import ctypes as C
+"""ctypes bridge to the C minimal-model integrator."""
+from __future__ import annotations
+
+import ctypes as _ct
+import sys
+from pathlib import Path
+from typing import Dict, Tuple
+
 import numpy as np
 
-HERE = os.path.dirname(__file__)
-LIB_DIR = os.path.join(HERE, "..", "C")
+_ROOT = Path(__file__).resolve().parents[1]
+_C_DIR = _ROOT / "C"
 
-def _try_load_lib():
-    # try Linux/Mac .so, then Windows .dll
-    for name in ("libmodel.so", "model.dll"):
-        path = os.path.join(LIB_DIR, name)
-        if os.path.exists(path):
-            lib = C.CDLL(path)
-            return lib
-    return None
+_LIB_NAMES = {
+    "win32": "model.dll",
+    "cygwin": "model.dll",
+}.get(sys.platform, "libmodel.so"), "model.dll"
 
-# numpy-based RK4 fallback (so you can run without compiling C yet)
-def _python_rk4(params, A, k, dt, nsteps):
-    G = np.empty(nsteps); I = np.empty(nsteps)
-    Gb, Ib = params["Gb"], params["Ib"]
-    p1,p2,p3,p4,p5,p6 = [params[k_] for k_ in ("p1","p2","p3","p4","p5","p6")]
-    y = np.array([Gb, 0.0, Ib], dtype=float)
-    t = 0.0
-    def deriv(t, y):
-        G_, X_, I_ = y
-        Dt = A * np.exp(-k*t)
-        dG = -(p1 + X_) * G_ + p1*Gb + Dt
-        dX = -p2 * X_ + p3 * (I_ - Ib)
-        sec = p4 * (G_ - p5) if G_ > p5 else 0.0
-        dI = -p6 * (I_ - Ib) + sec
-        return np.array([dG,dX,dI])
-    for i in range(nsteps):
-        G[i], I[i] = y[0], y[2]
-        k1 = dt*deriv(t, y)
-        k2 = dt*deriv(t+0.5*dt, y+0.5*k1)
-        k3 = dt*deriv(t+0.5*dt, y+0.5*k2)
-        k4 = dt*deriv(t+dt, y+k3)
-        y = y + (k1 + 2*k2 + 2*k3 + k4)/6.0
-        t += dt
-    return G, I
 
-def run_simulation(params, A, k):
-    dt = float(params["dt"]); t_end = float(params["t_end"])
-    nsteps = int(t_end/dt) + 1
-    lib = _try_load_lib()
-    if lib is None:
-        # fallback
-        G, I = _python_rk4(params, A, k, dt, nsteps)
-        t = np.linspace(0.0, t_end, nsteps)
-        return {"t": t, "G": G, "I": I, "source": "python"}
-    # set signature
-    class ParamsC(C.Structure):
-        _fields_ = [("p1", C.c_double),("p2", C.c_double),("p3", C.c_double),
-                    ("p4", C.c_double),("p5", C.c_double),("p6", C.c_double),
-                    ("Gb", C.c_double),("Ib", C.c_double),
-                    ("A", C.c_double),("k", C.c_double)]
-    lib.simulate.argtypes = [C.POINTER(C.c_double), C.POINTER(C.c_double),
-                             C.c_int, C.c_double, C.POINTER(ParamsC)]
+class _Params(_ct.Structure):
+    _fields_ = [
+        ("p1", _ct.c_double),
+        ("p2", _ct.c_double),
+        ("p3", _ct.c_double),
+        ("p4", _ct.c_double),
+        ("p5", _ct.c_double),
+        ("p6", _ct.c_double),
+        ("Gb", _ct.c_double),
+        ("Ib", _ct.c_double),
+        ("A", _ct.c_double),
+        ("k", _ct.c_double),
+    ]
+
+
+def _load_library() -> _ct.CDLL:
+    preferred, fallback = _LIB_NAMES
+    for candidate in (preferred, fallback):
+        path = _C_DIR / candidate
+        if path.exists():
+            lib = _ct.CDLL(str(path))
+            break
+    else:
+        raise FileNotFoundError(
+            "Could not locate libmodel shared library. "
+            "Build it first with `make -C C`."
+        )
+
+    lib.simulate.argtypes = [
+        _ct.POINTER(_ct.c_double),
+        _ct.POINTER(_ct.c_double),
+        _ct.c_int,
+        _ct.c_double,
+        _ct.POINTER(_Params),
+    ]
     lib.simulate.restype = None
+    return lib
 
-    G = (C.c_double * nsteps)()
-    I = (C.c_double * nsteps)()
-    pc = ParamsC(params["p1"],params["p2"],params["p3"],
-                 params["p4"],params["p5"],params["p6"],
-                 params["Gb"],params["Ib"], A, k)
-    lib.simulate(G, I, nsteps, dt, C.byref(pc))
-    G = np.frombuffer(G, dtype=np.float64, count=nsteps)
-    I = np.frombuffer(I, dtype=np.float64, count=nsteps)
-    t = np.linspace(0.0, t_end, nsteps)
-    return {"t": t, "G": G, "I": I, "source": "C"}
+
+_LIB = None
+
+
+def _get_library() -> _ct.CDLL:
+    global _LIB
+    if _LIB is None:
+        _LIB = _load_library()
+    return _LIB
+
+
+def simulate_c(params: Dict[str, float], A: float, k: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Run the C integrator and return ``(t, G, I)`` arrays."""
+
+    dt = float(params["dt"])
+    t_end = float(params["t_end"])
+    nsteps = int(t_end / dt) + 1
+
+    lib = _get_library()
+
+    g_arr = np.empty(nsteps, dtype=np.float64)
+    i_arr = np.empty(nsteps, dtype=np.float64)
+
+    params_struct = _Params(
+        float(params["p1"]),
+        float(params["p2"]),
+        float(params["p3"]),
+        float(params["p4"]),
+        float(params["p5"]),
+        float(params["p6"]),
+        float(params["Gb"]),
+        float(params["Ib"]),
+        float(A),
+        float(k),
+    )
+
+    lib.simulate(
+        g_arr.ctypes.data_as(_ct.POINTER(_ct.c_double)),
+        i_arr.ctypes.data_as(_ct.POINTER(_ct.c_double)),
+        nsteps,
+        dt,
+        _ct.byref(params_struct),
+    )
+
+    t_arr = np.linspace(0.0, t_end, nsteps, dtype=np.float64)
+    return t_arr, g_arr, i_arr

@@ -1,27 +1,50 @@
-import os
+"""Plotting helpers."""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict
+
 import matplotlib.pyplot as plt
+import numpy as np
 
-HERE = os.path.dirname(__file__)
-OUTDIR = os.path.abspath(os.path.join(HERE, "..", "figures"))
 
-def plot_results(name, results, outdir=OUTDIR):
-    os.makedirs(outdir, exist_ok=True)
-    t, G, I = results["t"], results["G"], results["I"]
+def _ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Glucose
-    plt.figure()
-    plt.plot(t, G, label=name)
-    plt.xlabel("Time (min)"); plt.ylabel("Glucose (mg/dL)")
-    plt.title(f"Glucose response: {name}")
-    plt.legend(); plt.tight_layout()
-    plt.savefig(os.path.join(outdir, f"{name}_glucose.png"))
-    plt.close()
 
-    # Insulin
-    plt.figure()
-    plt.plot(t, I, label=name)
-    plt.xlabel("Time (min)"); plt.ylabel("Insulin (µU/mL)")
-    plt.title(f"Insulin response: {name}")
-    plt.legend(); plt.tight_layout()
-    plt.savefig(os.path.join(outdir, f"{name}_insulin.png"))
-    plt.close()
+def plot_single(t: np.ndarray, y: np.ndarray, title: str, ylabel: str, outpath: Path) -> None:
+    outpath = Path(outpath)
+    _ensure_parent(outpath)
+
+    fig, ax = plt.subplots()
+    ax.plot(t, y, label=title)
+    ax.set_xlabel("Time (min)")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(True, linestyle="--", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(outpath, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_overlay(
+    t: np.ndarray,
+    curves: Dict[str, np.ndarray],
+    ylabel: str,
+    outpath: Path,
+) -> None:
+    outpath = Path(outpath)
+    _ensure_parent(outpath)
+
+    fig, ax = plt.subplots()
+    for name, values in curves.items():
+        ax.plot(t, values, label=name)
+    ax.set_xlabel("Time (min)")
+    ax.set_ylabel(ylabel)
+    ax.set_title(f"{ylabel} overlay")
+    ax.grid(True, linestyle="--", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(outpath, bbox_inches="tight")
+    plt.close(fig)

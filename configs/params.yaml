@@ -1,11 +1,10 @@
-# Physiological parameters for Bergman minimal model
-p1: 0.03      # glucose effectiveness (1/min)
-p2: 0.012     # insulin action decay rate (1/min)
-p3: 4.92e-6   # insulin sensitivity (1/min per µU/mL)
-p4: 0.0039    # insulin secretion rate (1/min)
-p5: 80        # glucose threshold for insulin secretion (mg/dL)
-p6: 0.265     # insulin clearance rate (1/min)
-Gb: 80        # basal glucose (mg/dL)
-Ib: 7         # basal insulin (µU/mL)
-dt: 0.01      # timestep (minutes)
-t_end: 180    # total sim time (minutes)
+p1: 0.03
+p2: 0.012
+p3: 4.92e-6
+p4: 0.0039
+p5: 80
+p6: 0.265
+Gb: 80
+Ib: 7
+dt: 0.01
+t_end: 180

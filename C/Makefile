@@ -1,13 +1,21 @@
-CC=gcc
-CFLAGS=-O2 -std=c11
+CC ?= gcc
+CFLAGS ?= -O3 -std=c11
+PICFLAG = -fPIC
 
-all: libmodel.so model.dll
+.PHONY: all clean libmodel
 
-libmodel.so: model.c model.h
-	$(CC) $(CFLAGS) -shared -fPIC -o $@ model.c
+all: libmodel model.dll
+
+libmodel: libmodel.so
+
+libmodel.so: model.o
+	$(CC) $(CFLAGS) -shared -o $@ $^
+
+model.o: model.c model.h
+	$(CC) $(CFLAGS) $(PICFLAG) -c -o $@ $<
 
 model.dll: model.c model.h
-	$(CC) $(CFLAGS) -shared -o $@ model.c
+	$(CC) $(CFLAGS) -shared -o $@ $<
 
 clean:
-	rm -f libmodel.so model.dll
+	rm -f libmodel.so model.dll model.o
