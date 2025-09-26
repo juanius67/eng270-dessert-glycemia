@@ -1,0 +1,331 @@
+import argparse
+import csv
+import ctypes as C
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+yaml = None
+try:
+    import yaml  # type: ignore
+except ImportError as exc:  # pragma: no cover
+    raise SystemExit("pyyaml is required to run this script") from exc
+
+ROOT = Path(__file__).resolve().parent
+CONFIG_PATH = ROOT / "configs" / "params.yaml"
+FIG_DIR = ROOT / "figures"
+TABLE_DIR = ROOT / "tables"
+LIB_DIR = ROOT / "C"
+
+DESSERTS = {
+    "chocotorta": {"dose_mgdL": 120.0, "k": 0.08},
+    "brigadeiro": {"dose_mgdL": 100.0, "k": 0.50},
+    "alfajor": {"dose_mgdL": 110.0, "k": 0.10},
+    "acai": {"dose_mgdL": 120.0, "k": 0.15},
+}
+
+
+class ParamsC(C.Structure):
+    _fields_ = [
+        ("p1", C.c_double),
+        ("p2", C.c_double),
+        ("p3", C.c_double),
+        ("p4", C.c_double),
+        ("p5", C.c_double),
+        ("p6", C.c_double),
+        ("Gb", C.c_double),
+        ("Ib", C.c_double),
+        ("A", C.c_double),
+        ("k", C.c_double),
+    ]
+
+
+def load_params(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    if data is None:
+        raise ValueError(f"Empty params file: {path}")
+    return {k: float(v) for k, v in data.items()}
+
+
+def load_library() -> C.CDLL:
+    for name in ("libmodel.so", "model.dll"):
+        candidate = LIB_DIR / name
+        if candidate.exists():
+            lib = C.CDLL(str(candidate))
+            lib.simulate.argtypes = [
+                C.POINTER(C.c_double),
+                C.POINTER(C.c_double),
+                C.c_int,
+                C.c_double,
+                C.POINTER(ParamsC),
+            ]
+            lib.simulate.restype = None
+            return lib
+    raise FileNotFoundError(
+        "Unable to locate C/libmodel.so or C/model.dll. Build the library first."
+    )
+
+
+def simulate(lib: C.CDLL, params: dict, A: float, k: float, dt_override: float | None = None):
+    dt = float(dt_override) if dt_override is not None else float(params["dt"])
+    t_end = float(params["t_end"])
+    nsteps = int(round(t_end / dt)) + 1
+
+    G_buf = (C.c_double * nsteps)()
+    I_buf = (C.c_double * nsteps)()
+    packed = ParamsC(
+        params["p1"],
+        params["p2"],
+        params["p3"],
+        params["p4"],
+        params["p5"],
+        params["p6"],
+        params["Gb"],
+        params["Ib"],
+        A,
+        k,
+    )
+
+    lib.simulate(G_buf, I_buf, nsteps, dt, C.byref(packed))
+
+    G = np.ctypeslib.as_array(G_buf)
+    I = np.ctypeslib.as_array(I_buf)
+    t = np.linspace(0.0, t_end, nsteps)
+    return t.copy(), G.copy(), I.copy()
+
+
+def calibrate_A(
+    lib: C.CDLL,
+    params: dict,
+    k: float,
+    A0: float,
+    target_peak: float = 50.0,
+    tol: float = 5.0,
+    max_iter: int = 4,
+):
+    A = max(float(A0), 0.1)
+    best = None
+    Gb = params["Gb"]
+
+    for _ in range(max_iter):
+        t, G, I = simulate(lib, params, A, k)
+        peak_idx = int(np.argmax(G))
+        peak_delta = float(G[peak_idx] - Gb)
+        t_peak = float(t[peak_idx])
+        best = (A, t, G, I, peak_delta, t_peak)
+
+        if abs(peak_delta - target_peak) <= tol:
+            break
+
+        scale = target_peak / max(peak_delta, 1e-6)
+        A = max(A * scale, 0.1)
+        if A > 200.0:
+            print(
+                f"[calibration] Guardrail hit: A exceeded 200 mg/dL/min; clamping for stability."
+            )
+            A = 200.0
+            t, G, I = simulate(lib, params, A, k)
+            peak_idx = int(np.argmax(G))
+            peak_delta = float(G[peak_idx] - Gb)
+            t_peak = float(t[peak_idx])
+            best = (A, t, G, I, peak_delta, t_peak)
+            break
+
+    assert best is not None  # for mypy; loop always runs at least once
+    final_A, t, G, I, peak_delta, t_peak = best
+    if final_A < 0.1:
+        final_A = 0.1
+    return final_A, t, G, I, peak_delta, t_peak
+
+
+def metrics(t: np.ndarray, G: np.ndarray, I: np.ndarray, Gb: float, window: float = 120.0):
+    limit_idx = np.searchsorted(t, window, side="right")
+    t_window = t[:limit_idx]
+    G_window = G[:limit_idx]
+    I_window = I[:limit_idx]
+
+    peak_G = float(G.max())
+    t_peak_G = float(t[G.argmax()])
+    auc_G = float(np.trapezoid(np.clip(G_window - Gb, 0.0, None), t_window))
+
+    peak_I = float(I.max())
+    t_peak_I = float(t[I.argmax()])
+    auc_I = float(np.trapezoid(I_window, t_window))
+
+    return {
+        "peak_G": peak_G,
+        "t_peak_G": t_peak_G,
+        "AUC_G_aboveGb_0_120": auc_G,
+        "peak_I": peak_I,
+        "t_peak_I": t_peak_I,
+        "AUC_I_0_120": auc_I,
+    }
+
+
+def ensure_dirs():
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    TABLE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def save_per_dessert_plots(name: str, t: np.ndarray, G: np.ndarray, I: np.ndarray):
+    plt.figure()
+    plt.plot(t, G, label=name)
+    plt.xlabel("Time (min)")
+    plt.ylabel("Glucose (mg/dL)")
+    plt.title(f"Glucose response: {name}")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / f"{name}_glucose.png")
+    plt.close()
+
+    plt.figure()
+    plt.plot(t, I, label=name)
+    plt.xlabel("Time (min)")
+    plt.ylabel("Insulin (µU/mL)")
+    plt.title(f"Insulin response: {name}")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / f"{name}_insulin.png")
+    plt.close()
+
+
+def save_overlay_plots(results: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]):
+    plt.figure()
+    for name, (t, G, _) in results.items():
+        plt.plot(t, G, label=name)
+    plt.xlabel("Time (min)")
+    plt.ylabel("Glucose (mg/dL)")
+    plt.title("Glucose responses")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / "overlay_glucose.png")
+    plt.close()
+
+    plt.figure()
+    for name, (t, _, I) in results.items():
+        plt.plot(t, I, label=name)
+    plt.xlabel("Time (min)")
+    plt.ylabel("Insulin (µU/mL)")
+    plt.title("Insulin responses")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / "overlay_insulin.png")
+    plt.close()
+
+
+def write_summary_csv(rows: list[tuple[str, dict]]):
+    path = TABLE_DIR / "summary.csv"
+    header = [
+        "dessert",
+        "final_A",
+        "peak_G",
+        "t_peak_G",
+        "AUC_G_aboveGb_0_120",
+        "peak_I",
+        "t_peak_I",
+        "AUC_I_0_120",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(header)
+        for name, values in rows:
+            writer.writerow(
+                [
+                    name,
+                    f"{values['final_A']:.4f}",
+                    f"{values['peak_G']:.2f}",
+                    f"{values['t_peak_G']:.2f}",
+                    f"{values['AUC_G_aboveGb_0_120']:.2f}",
+                    f"{values['peak_I']:.2f}",
+                    f"{values['t_peak_I']:.2f}",
+                    f"{values['AUC_I_0_120']:.2f}",
+                ]
+            )
+
+
+def run_all(params: dict, lib: C.CDLL):
+    ensure_dirs()
+    results: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    summary_rows: list[tuple[str, dict]] = []
+    Gb = params["Gb"]
+
+    for name, spec in DESSERTS.items():
+        dose = float(spec["dose_mgdL"])
+        k = float(spec["k"])
+        A0 = k * dose
+        final_A, t, G, I, peak_delta, t_peak = calibrate_A(lib, params, k, A0)
+        print(
+            f"{name}: k={k:.3f}, dose={dose:.1f} mg/dL, final_A={final_A:.3f}, "
+            f"peakΔ={peak_delta:.2f} mg/dL at t={t_peak:.2f} min"
+        )
+        results[name] = (t, G, I)
+        stats = metrics(t, G, I, Gb)
+        stats["final_A"] = final_A
+        summary_rows.append((name, stats))
+        save_per_dessert_plots(name, t, G, I)
+
+    save_overlay_plots(results)
+    write_summary_csv(summary_rows)
+
+
+def run_sanity(params: dict, lib: C.CDLL):
+    Gb = params["Gb"]
+    print("[sanity] Running fasting baseline (D(t)=0)...")
+    t, G, I = simulate(lib, params, 0.0, 1.0)
+    print(
+        f"[sanity] Baseline steady-state: G0={G[0]:.2f}→G_end={G[-1]:.2f}, I0={I[0]:.2f}→I_end={I[-1]:.2f}"
+    )
+    if not np.allclose(G[0], Gb):
+        print(f"[sanity] Warning: G baseline {G[0]:.2f} differs from Gb={Gb:.2f}")
+
+    name, spec = next(iter(DESSERTS.items()))
+    dose = float(spec["dose_mgdL"])
+    k = float(spec["k"])
+    A0 = k * dose
+    final_A, _, _, _, _, _ = calibrate_A(lib, params, k, A0)
+    print(f"[sanity] dt-halving check with {name}...")
+    dt = params["dt"]
+    coarse = simulate(lib, params, final_A, k, dt_override=dt)
+    fine = simulate(lib, params, final_A, k, dt_override=dt / 2.0)
+
+    G_coarse = coarse[1]
+    G_fine = fine[1][::2]
+    diff = np.max(np.abs(G_coarse - G_fine))
+    rel = diff / max(np.max(np.abs(G_fine)), 1e-9)
+    print(
+        f"[sanity] max |G_coarse - G_fine| = {diff:.6f} ({rel*100:.4f}% of max fine G)"
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Dessert glycemia simulator")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Run all desserts and generate figures + summary table",
+    )
+    parser.add_argument(
+        "--sanity",
+        action="store_true",
+        help="Run fasting baseline and dt-halving sanity checks",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    if not args.all and not args.sanity:
+        raise SystemExit("Use --all and/or --sanity to run the simulator.")
+
+    params = load_params(CONFIG_PATH)
+    lib = load_library()
+
+    if args.all:
+        run_all(params, lib)
+    if args.sanity:
+        run_sanity(params, lib)
+
+
+if __name__ == "__main__":
+    main()
