@@ -3,9 +3,17 @@ __pycache__/
 .mypy_cache/
 .ipynb_checkpoints/
 *.pyc
+
+# build / binaries
+C/*.dll
+C/*.lib
+C/*.exp
+C/*.obj
+C/*.so
+C/*.dylib
+
+# generated outputs
 figures/
 tables/
 *.png
 *.csv
-C/libmodel.so
-C/model.dll
