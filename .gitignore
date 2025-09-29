@@ -1,14 +1,23 @@
+# env & caches
 .venv/
 __pycache__/
 .mypy_cache/
+.ipynb_checkpoints/
 *.pyc
-figures/
-tables/
-*.png
-*.csv
+# OS junk
+.DS_Store
+Thumbs.db
+# build outputs
 C/*.dll
 C/*.lib
 C/*.exp
 C/*.obj
 C/*.so
 C/*.dylib
+# generated results
+figures/
+tables/
+*.png
+*.csv
+# windows device file that breaks git
+nul

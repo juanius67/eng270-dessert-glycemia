@@ -227,3 +227,16 @@ make -C C clean && make -C C
 ## License
 
 Academic/educational use for ENG-270 coursework.
+
+---
+
+## How to reproduce
+
+- Install: `pip install -r requirements.txt`
+- Build (optional, Windows x64 example): `cl /nologo /LD C\model.c /Fe:C\model.dll`
+- Run (dose-driven): `python run.py --all`
+- Run (equalized peaks): `python run.py --all --calibrate`
+- Sanity checks: `python run.py --sanity`
+- Outputs: figures/*.png and tables/summary.csv (regenerated each run).
+
+Graders only need `run.py` + `configs/params.yaml` + `C/` to reproduce.
