@@ -21,3 +21,4 @@ tables/
 *.csv
 # windows device file that breaks git
 nul
+.venv/
