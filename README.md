@@ -160,6 +160,16 @@ pytest
 
 ---
 
+## Commands
+
+* Run tests: `python -m pytest -q`
+* Reproduce figures/tables:
+  * Dose-driven: `python run.py --all`
+  * Equalized peaks: `python run.py --all --calibrate`
+  * Include LaTeX export: `python run.py --all --latex`
+
+---
+
 ## How it works (brief)
 
 * C exports `simulate(G,I,nsteps,dt,Params*)` (fixed-step RK4).

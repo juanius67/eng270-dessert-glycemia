@@ -304,7 +304,7 @@ def save_line_plot(x: Sequence[float], y: Sequence[float], path: Path, title: st
     plt.title(title)
     plt.xlabel("Time (min)")
     plt.ylabel(ylabel)
-    plt.grid(True, alpha=0.3)
+    plt.grid(True)
     plt.tight_layout()
     plt.savefig(path, dpi=300)
     plt.close()
@@ -319,7 +319,7 @@ def save_overlay(curves: Iterable[Tuple[str, Sequence[float], Sequence[float]]],
     plt.ylabel(ylabel)
     if xlim is not None:
         plt.xlim(*xlim)
-    plt.grid(True, alpha=0.3)
+    plt.grid(True)
     plt.legend()
     plt.tight_layout()
     plt.savefig(path, dpi=300)
@@ -333,7 +333,7 @@ def make_dose_curve(A: float, k: float, duration: float = 60.0, step: float = 0.
     return times, values
 
 
-def write_summary(rows: List[Dict[str, object]]) -> None:
+def write_summary(rows: List[Dict[str, object]], latex: bool = False) -> None:
     fieldnames = [
         "name",
         "k",
@@ -355,13 +355,62 @@ def write_summary(rows: List[Dict[str, object]]) -> None:
             writer.writerow(row)
     print(f"Wrote {TABLE_DIR / 'summary.csv'}")
 
+    if latex:
+        latex_path = TABLE_DIR / "summary.tex"
+        columns = [
+            ("name", "name", "{value}"),
+            ("k", "k", "{value:.3f}"),
+            ("backend", "backend", "{value}"),
+            ("mode", "mode", "{value}"),
+            ("dose_mgdL", "dose", "{value:.2f}"),
+            ("final_A", "A", "{value:.2f}"),
+            ("peakG", "peakG", "{value:.2f}"),
+            ("t_peakG", "t$_{peakG}$", "{value:.1f}"),
+            ("AUCG_aboveGb_0_120", "AUCG", "{value:.1f}"),
+            ("peakI", "peakI", "{value:.2f}"),
+            ("t_peakI", "t$_{peakI}$", "{value:.1f}"),
+            ("AUCI_0_120", "AUCI", "{value:.1f}"),
+        ]
+        with latex_path.open("w", encoding="utf-8") as handle:
+            handle.write("% Auto-generated summary table\\n")
+            handle.write(f"\\begin{{tabular}}{{l{'c' * (len(columns) - 1)}}}\\n")
+            header = " & ".join(label for _, label, _ in columns)
+            handle.write(f"{header} \\\\ \\hline\\n")
+            for row in rows:
+                formatted = []
+                for key, _, fmt in columns:
+                    value = row[key]
+                    formatted.append(fmt.format(value=value))
+                handle.write(" & ".join(formatted) + " \\\\ \n")
+            handle.write("\\end{tabular}\\n")
+        print(f"Wrote {latex_path}")
 
-def run_pipeline(simulator: Simulator, params: Dict[str, float], dt: float, t_end: float, calibrate: bool) -> None:
+
+def write_manifest(entries: List[Dict[str, str]]) -> None:
+    manifest_path = TABLE_DIR / "manifest.csv"
+    fieldnames = ["path", "caption"]
+    with manifest_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow(entry)
+    print(f"Wrote {manifest_path}")
+
+
+def run_pipeline(
+    simulator: Simulator,
+    params: Dict[str, float],
+    dt: float,
+    t_end: float,
+    calibrate: bool,
+    latex: bool,
+) -> None:
     ensure_directories()
     summary_rows: List[Dict[str, object]] = []
     glucose_curves: List[Tuple[str, List[float], List[float]]] = []
     insulin_curves: List[Tuple[str, List[float], List[float]]] = []
     dose_curves: List[Tuple[str, List[float], List[float]]] = []
+    manifest_entries: List[Dict[str, str]] = []
 
     mode_label = "calibrated" if calibrate else "dose-driven"
     print(f"Running dessert pipeline ({mode_label}) with backend={simulator.label}...")
@@ -398,18 +447,57 @@ def run_pipeline(simulator: Simulator, params: Dict[str, float], dt: float, t_en
         )
 
         print(
-            f"{name:12s} | mode={mode:11s} | A={result.A:6.2f} | peakΔG={metrics['peak_delta']:+6.2f} mg/dL @ {metrics['t_peakG']:.1f} min | "
+            f"{name:12s} | backend={simulator.label:6s} | mode={mode:11s} | A={result.A:6.2f} | "
+            f"peakΔG={metrics['peak_delta']:+6.2f} mg/dL @ {metrics['t_peakG']:.1f} min | "
             f"peakI={metrics['peakI']:.2f} @ {metrics['t_peakI']:.1f} min"
         )
 
-        save_line_plot(result.times, result.glucose, FIG_DIR / f"{name}_glucose.png", f"{name.title()} glucose", "Glucose (mg/dL)")
-        save_line_plot(result.times, result.insulin, FIG_DIR / f"{name}_insulin.png", f"{name.title()} insulin", "Insulin (mU/L)")
+        glucose_path = FIG_DIR / f"{name}_glucose.png"
+        insulin_path = FIG_DIR / f"{name}_insulin.png"
 
-    save_overlay(glucose_curves, FIG_DIR / "glucose_overlay.png", "Glucose overlay", "Glucose (mg/dL)")
-    save_overlay(insulin_curves, FIG_DIR / "insulin_overlay.png", "Insulin overlay", "Insulin (mU/L)")
-    save_overlay(dose_curves, FIG_DIR / "D_overlay.png", "Dessert input A e^{-kt}", "Dose (mg/dL)", xlim=(0.0, 60.0))
+        save_line_plot(result.times, result.glucose, glucose_path, f"{name.title()} glucose", "Glucose (mg/dL)")
+        save_line_plot(result.times, result.insulin, insulin_path, f"{name.title()} insulin", "Insulin (mU/L)")
 
-    write_summary(summary_rows)
+        manifest_entries.extend(
+            [
+                {
+                    "path": str(glucose_path.relative_to(ROOT)),
+                    "caption": f"{name.title()} glucose curve",
+                },
+                {
+                    "path": str(insulin_path.relative_to(ROOT)),
+                    "caption": f"{name.title()} insulin curve",
+                },
+            ]
+        )
+
+    overlay_glucose = FIG_DIR / "glucose_overlay.png"
+    overlay_insulin = FIG_DIR / "insulin_overlay.png"
+    overlay_dose = FIG_DIR / "D_overlay.png"
+
+    save_overlay(glucose_curves, overlay_glucose, "Glucose overlay", "Glucose (mg/dL)")
+    save_overlay(insulin_curves, overlay_insulin, "Insulin overlay", "Insulin (mU/L)")
+    save_overlay(dose_curves, overlay_dose, "Dessert input A e^{-kt}", "Dose (mg/dL)", xlim=(0.0, 60.0))
+
+    manifest_entries.extend(
+        [
+            {
+                "path": str(overlay_glucose.relative_to(ROOT)),
+                "caption": "Dessert glucose overlay",
+            },
+            {
+                "path": str(overlay_insulin.relative_to(ROOT)),
+                "caption": "Dessert insulin overlay",
+            },
+            {
+                "path": str(overlay_dose.relative_to(ROOT)),
+                "caption": "Dessert input profiles",
+            },
+        ]
+    )
+
+    write_summary(summary_rows, latex=latex)
+    write_manifest(manifest_entries)
 
 
 def run_sanity(simulator: Simulator, params: Dict[str, float], dt: float, t_end: float) -> None:
@@ -430,6 +518,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--all", action="store_true", help="Run full dessert pipeline (default)")
     parser.add_argument("--sanity", action="store_true", help="Run baseline + dt-halving checks")
     parser.add_argument("--calibrate", action="store_true", help="Calibrate amplitudes to ~50 mg/dL peaks")
+    parser.add_argument("--latex", action="store_true", help="Also emit LaTeX summary table")
     return parser.parse_args(argv)
 
 
@@ -443,7 +532,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     run_all = args.all or not args.sanity
     if run_all:
-        run_pipeline(simulator, params, dt, t_end, calibrate=args.calibrate)
+        run_pipeline(simulator, params, dt, t_end, calibrate=args.calibrate, latex=args.latex)
     if args.sanity:
         run_sanity(simulator, params, dt, t_end)
 
