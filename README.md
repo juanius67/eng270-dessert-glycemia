@@ -254,3 +254,10 @@ Academic/educational use for ENG-270 coursework.
 - Outputs: figures/*.png and tables/summary.csv (regenerated each run).
 
 Graders only need `run.py` + `configs/params.yaml` + `C/` to reproduce.
+
+## Data sources
+- Havanna Alfajor Super dulce de leche (EAN 7791875101598), per-100g label:
+  ~393 kcal; fat 17 g (sat 7 g); carbs 52 g (sugars 38 g); protein 7 g; sodium ~107 mg.
+  Source: OpenFoodFacts product page and retail listing with nutrition per 100 g.
+- Per-unit cross-check (70 g): ~275 kcal; fat ~12 g; carbs ~37 g; protein ~5 g.
+  Source: FatSecret (Havanna Alfajor Súper Dulce de Leche, 70 g).
