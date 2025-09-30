@@ -23,16 +23,24 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "configs" / "params.yaml"
+DESSERTS_CONFIG_PATH = ROOT / "configs" / "desserts.yaml"
 C_DIR = ROOT / "C"
 FIG_DIR = ROOT / "figures"
 TABLE_DIR = ROOT / "tables"
 
-DESSERTS: Dict[str, Dict[str, float]] = {
+LEGACY_DESSERTS: Dict[str, Dict[str, float]] = {
     "chocotorta": {"dose_mgdL": 60.0, "k": 0.08},
     "brigadeiro": {"dose_mgdL": 85.0, "k": 0.50},
     "alfajor": {"dose_mgdL": 70.0, "k": 0.10},
     "acai": {"dose_mgdL": 90.0, "k": 0.15},
 }
+
+Vd_dL = 100.0
+f_app_base = 0.35
+beta_fiber = 0.04
+beta_fat = 0.03
+kfast_base = 0.50
+kslow_base = 0.08
 
 TARGET_PEAK = 50.0
 TARGET_TOL = 5.0
@@ -216,6 +224,60 @@ def load_config(path: Path) -> Dict[str, float]:
     return {key: float(data[key]) for key in required}
 
 
+def load_desserts(use_nutrition: bool) -> Dict[str, Dict[str, float]]:
+    if not use_nutrition:
+        desserts: Dict[str, Dict[str, float]] = {}
+        for name, specs in LEGACY_DESSERTS.items():
+            desserts[name] = {
+                "dose_mgdL": specs["dose_mgdL"],
+                "k": specs["k"],
+                "carbs_g": None,
+                "sugars_g": None,
+                "fiber_g": None,
+                "fat_g": None,
+                "protein_g": None,
+                "f_fast": None,
+                "f_app": None,
+                "k_mod": None,
+                "keff": specs["k"],
+            }
+        return desserts
+
+    with DESSERTS_CONFIG_PATH.open("r", encoding="utf-8") as handle:
+        raw_data = yaml.safe_load(handle) or {}
+
+    desserts: Dict[str, Dict[str, float]] = {}
+    for name, data in raw_data.items():
+        carbs_g = float(data.get("carbs_g", 0.0))
+        sugars_g = float(data.get("sugars_g", 0.0))
+        fiber_g = float(data.get("fiber_g", 0.0))
+        fat_g = float(data.get("fat_g", 0.0))
+        protein_g = float(data.get("protein_g", 0.0))
+
+        avail_carbs_g = max(0.0, carbs_g - 0.5 * fiber_g)
+        f_fast = 0.0 if carbs_g <= 0.0 else min(1.0, max(0.0, sugars_g / carbs_g))
+        f_app = f_app_base * (1.0 - beta_fiber * (fiber_g / 10.0))
+        f_app = max(0.05, min(0.60, f_app))
+        k_mod = 1.0 / (1.0 + beta_fat * (fat_g / 10.0) + beta_fiber * (fiber_g / 10.0))
+        keff = (f_fast * kfast_base + (1.0 - f_fast) * kslow_base) * k_mod
+        dose_total_mgdL = (avail_carbs_g * f_app * 1000.0) / Vd_dL
+
+        desserts[name] = {
+            "dose_mgdL": dose_total_mgdL,
+            "k": keff,
+            "carbs_g": carbs_g,
+            "sugars_g": sugars_g,
+            "fiber_g": fiber_g,
+            "fat_g": fat_g,
+            "protein_g": protein_g,
+            "f_fast": f_fast,
+            "f_app": f_app,
+            "k_mod": k_mod,
+            "keff": keff,
+        }
+    return desserts
+
+
 def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
@@ -348,6 +410,22 @@ def write_summary(rows: List[Dict[str, object]], latex: bool = False) -> None:
         "t_peakI",
         "AUCI_0_120",
     ]
+    extra_fields = [
+        "carbs_g",
+        "sugars_g",
+        "fiber_g",
+        "fat_g",
+        "protein_g",
+        "f_fast",
+        "f_app",
+        "k_mod",
+        "keff",
+        "dose_mgdL",
+        "final_A",
+    ]
+    for field in extra_fields:
+        if field not in fieldnames:
+            fieldnames.append(field)
     with (TABLE_DIR / "summary.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -402,8 +480,10 @@ def run_pipeline(
     params: Dict[str, float],
     dt: float,
     t_end: float,
+    desserts: Dict[str, Dict[str, float]],
     calibrate: bool,
     latex: bool,
+    nutrition_enabled: bool,
 ) -> None:
     ensure_directories()
     summary_rows: List[Dict[str, object]] = []
@@ -415,7 +495,9 @@ def run_pipeline(
     mode_label = "calibrated" if calibrate else "dose-driven"
     print(f"Running dessert pipeline ({mode_label}) with backend={simulator.label}...")
 
-    for name, specs in DESSERTS.items():
+    nutrition_mode = "nutrition" if nutrition_enabled else "legacy"
+
+    for name, specs in desserts.items():
         base_A = specs["k"] * specs["dose_mgdL"]
         if calibrate:
             result, converged = calibrate_amplitude(simulator, params, dt, t_end, base_A, specs["k"])
@@ -424,32 +506,42 @@ def run_pipeline(
             result = simulator.run(params, dt, t_end, base_A, specs["k"])
             mode = "dose-driven"
 
+        full_mode = f"{nutrition_mode}-{mode}"
+
         metrics = compute_metrics(result, params)
         glucose_curves.append((name, result.times, result.glucose))
         insulin_curves.append((name, result.times, result.insulin))
         dose_curves.append((name, *make_dose_curve(result.A, result.k)))
 
-        summary_rows.append(
-            {
-                "name": name,
-                "k": specs["k"],
-                "backend": simulator.label,
-                "mode": mode,
-                "dose_mgdL": specs["dose_mgdL"],
-                "final_A": result.A,
-                "peakG": metrics["peakG"],
-                "t_peakG": metrics["t_peakG"],
-                "AUCG_aboveGb_0_120": metrics["AUCG"],
-                "peakI": metrics["peakI"],
-                "t_peakI": metrics["t_peakI"],
-                "AUCI_0_120": metrics["AUCI"],
-            }
-        )
+        summary_row: Dict[str, object] = {
+            "name": name,
+            "k": specs["k"],
+            "backend": simulator.label,
+            "mode": full_mode,
+            "dose_mgdL": specs["dose_mgdL"],
+            "final_A": result.A,
+            "peakG": metrics["peakG"],
+            "t_peakG": metrics["t_peakG"],
+            "AUCG_aboveGb_0_120": metrics["AUCG"],
+            "peakI": metrics["peakI"],
+            "t_peakI": metrics["t_peakI"],
+            "AUCI_0_120": metrics["AUCI"],
+            "carbs_g": specs.get("carbs_g"),
+            "sugars_g": specs.get("sugars_g"),
+            "fiber_g": specs.get("fiber_g"),
+            "fat_g": specs.get("fat_g"),
+            "protein_g": specs.get("protein_g"),
+            "f_fast": specs.get("f_fast"),
+            "f_app": specs.get("f_app"),
+            "k_mod": specs.get("k_mod"),
+            "keff": specs.get("keff"),
+        }
+        summary_rows.append(summary_row)
 
         print(
-            f"{name:12s} | backend={simulator.label:6s} | mode={mode:11s} | A={result.A:6.2f} | "
-            f"peakΔG={metrics['peak_delta']:+6.2f} mg/dL @ {metrics['t_peakG']:.1f} min | "
-            f"peakI={metrics['peakI']:.2f} @ {metrics['t_peakI']:.1f} min"
+            f"{name:12s} | backend={simulator.label:6s} | mode={full_mode:18s} | "
+            f"keff={specs['k']:.3f} | dose={specs['dose_mgdL']:.2f} mg/dL | "
+            f"peakΔG={metrics['peak_delta']:+6.2f} mg/dL @ {metrics['t_peakG']:.1f} min"
         )
 
         glucose_path = FIG_DIR / f"{name}_glucose.png"
@@ -477,7 +569,7 @@ def run_pipeline(
 
     save_overlay(glucose_curves, overlay_glucose, "Glucose overlay", "Glucose (mg/dL)")
     save_overlay(insulin_curves, overlay_insulin, "Insulin overlay", "Insulin (mU/L)")
-    save_overlay(dose_curves, overlay_dose, "Dessert input A e^{-kt}", "Dose (mg/dL)", xlim=(0.0, 60.0))
+    save_overlay(dose_curves, overlay_dose, "Dessert input D(t)=A e^{-k t}", "Dose (mg/dL)", xlim=(0.0, 60.0))
 
     manifest_entries.extend(
         [
@@ -519,6 +611,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sanity", action="store_true", help="Run baseline + dt-halving checks")
     parser.add_argument("--calibrate", action="store_true", help="Calibrate amplitudes to ~50 mg/dL peaks")
     parser.add_argument("--latex", action="store_true", help="Also emit LaTeX summary table")
+    parser.add_argument(
+        "--nutrition",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable nutrition-aware dessert mapping (default: on)",
+    )
     return parser.parse_args(argv)
 
 
@@ -528,11 +626,22 @@ def main(argv: Sequence[str] | None = None) -> None:
     dt = params["dt"]
     t_end = params["t_end"]
 
+    desserts = load_desserts(args.nutrition)
+
     simulator = Simulator()
 
     run_all = args.all or not args.sanity
     if run_all:
-        run_pipeline(simulator, params, dt, t_end, calibrate=args.calibrate, latex=args.latex)
+        run_pipeline(
+            simulator,
+            params,
+            dt,
+            t_end,
+            desserts,
+            calibrate=args.calibrate,
+            latex=args.latex,
+            nutrition_enabled=args.nutrition,
+        )
     if args.sanity:
         run_sanity(simulator, params, dt, t_end)
 

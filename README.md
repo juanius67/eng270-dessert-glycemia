@@ -119,8 +119,8 @@ p5: 80
 p6: 0.265
 Gb: 80
 Ib: 7
-dt: 0.01
-t_end: 180
+dt: 0.5
+t_end: 1440
 ```
 
 ### Dessert inputs (edit to tune)
@@ -167,6 +167,10 @@ pytest
   * Dose-driven: `python run.py --all`
   * Equalized peaks: `python run.py --all --calibrate`
   * Include LaTeX export: `python run.py --all --latex`
+  * 24 h run (dose-driven, nutrition-aware): `python run.py --all`
+  * Equalized peaks (appendix): `python run.py --all --calibrate`
+  * Disable nutrition mapping (legacy): `python run.py --all --no-nutrition`
+  * Horizon/step are set in `configs/params.yaml` (`t_end=1440`, `dt=0.5`).
 
 ---
 
