@@ -8,3 +8,15 @@ Gb: 80
 Ib: 7
 dt: 0.5
 t_end: 1440
+plot_window_min: 240          # zoomed plots show 0–240 min
+
+# Nutrition→kinetics mapping (tunable)
+Vd_dL: 120.0                  # larger distribution volume
+hepatic_first_pass: 0.25      # fraction removed by liver before systemic
+f_app_base: 0.22              # baseline appearance fraction
+beta_fiber: 0.06              # appearance ↓ per 10 g fiber
+beta_fat: 0.05                # gastric emptying slowdown per 10 g fat
+kfast_base: 0.45              # min^-1 fast sugars
+kslow_base: 0.07              # min^-1 slow starch
+alpha_prot: 0.10              # μU·mL^-1 per g protein
+kprot: 0.05                   # min^-1

@@ -37,15 +37,21 @@ LEGACY_DESSERTS: Dict[str, Dict[str, float]] = {
 
 DEFAULT_DT = 0.5
 DEFAULT_T_END = 1440.0
+DEFAULT_PLOT_WINDOW = 240.0
 
-Vd_dL = 100.0  # glucose distribution (dL)
-f_app_base = 0.35  # baseline appearance fraction
-beta_fiber = 0.04  # ↓ appearance per 10 g fiber
-beta_fat = 0.03    # gastric emptying slowdown per 10 g fat
-kfast_base = 0.50  # min^-1 (fast sugars)
-kslow_base = 0.08  # min^-1 (slow starch)
-alpha_prot = 0.12  # μU·mL^-1 per g protein (insulin drive)
-kprot = 0.05       # min^-1
+NUTRITION_DEFAULTS: Dict[str, float] = {
+    "Vd_dL": 120.0,
+    "hepatic_first_pass": 0.25,
+    "f_app_base": 0.22,
+    "beta_fiber": 0.06,
+    "beta_fat": 0.05,
+    "kfast_base": 0.45,
+    "kslow_base": 0.07,
+    "alpha_prot": 0.10,
+    "kprot": 0.05,
+}
+
+nutrition_settings: Dict[str, float] = NUTRITION_DEFAULTS.copy()
 
 TARGET_PEAK = 50.0
 TARGET_TOL = 5.0
@@ -341,6 +347,7 @@ def try_load_library(path: Path) -> ctypes.CDLL | None:
 
 
 def load_config(path: Path) -> Dict[str, float]:
+    global nutrition_settings
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     required = {"p1", "p2", "p3", "p4", "p5", "p6", "Gb", "Ib"}
@@ -350,6 +357,9 @@ def load_config(path: Path) -> Dict[str, float]:
     params = {key: float(data[key]) for key in required}
     params["dt"] = float(data.get("dt", DEFAULT_DT))
     params["t_end"] = float(data.get("t_end", DEFAULT_T_END))
+    params["plot_window_min"] = float(data.get("plot_window_min", DEFAULT_PLOT_WINDOW))
+    for key, default in NUTRITION_DEFAULTS.items():
+        nutrition_settings[key] = float(data.get(key, default))
     return params
 
 
@@ -358,12 +368,13 @@ def clip(value: float, lo: float, hi: float) -> float:
 
 
 def load_desserts(use_nutrition: bool) -> Dict[str, Dict[str, float | str | None | DoseProfile]]:
+    settings = nutrition_settings
     if not use_nutrition:
         desserts: Dict[str, Dict[str, float | str | None | DoseProfile]] = {}
         for name, specs in LEGACY_DESSERTS.items():
             k = specs["k"]
             dose = specs["dose_mgdL"]
-            profile = DoseProfile(k * dose, k, 0.0, k, 0.0, kprot)
+            profile = DoseProfile(k * dose, k, 0.0, k, 0.0, settings["kprot"])
             desserts[name] = {
                 "profile": profile,
                 "dose_mgdL": profile.total_dose(),
@@ -393,18 +404,24 @@ def load_desserts(use_nutrition: bool) -> Dict[str, Dict[str, float | str | None
 
         avail_carbs_g = max(0.0, carbs_g - 0.5 * fiber_g)
         f_fast = 0.0 if carbs_g <= 0.0 else clip(sugars_g / carbs_g, 0.0, 1.0)
-        f_app = clip(f_app_base * (1.0 - beta_fiber * (fiber_g / 10.0)), 0.05, 0.60)
-        k_mod = 1.0 / (1.0 + beta_fat * (fat_g / 10.0) + beta_fiber * (fiber_g / 10.0))
-        kfast = kfast_base * k_mod
-        kslow = kslow_base * k_mod
-        dose_total_mgdL = (avail_carbs_g * f_app * 1000.0) / Vd_dL
+        f_app = clip(settings["f_app_base"] * (1.0 - settings["beta_fiber"] * (fiber_g / 10.0)), 0.05, 0.60)
+        k_mod = 1.0 / (
+            1.0
+            + settings["beta_fat"] * (fat_g / 10.0)
+            + settings["beta_fiber"] * (fiber_g / 10.0)
+        )
+        kfast = settings["kfast_base"] * k_mod
+        kslow = settings["kslow_base"] * k_mod
+        dose_total_mgdL = (
+            (avail_carbs_g * f_app * 1000.0) / settings["Vd_dL"]
+        ) * (1.0 - settings["hepatic_first_pass"])
         dose_fast = dose_total_mgdL * f_fast
         dose_slow = dose_total_mgdL * (1.0 - f_fast)
         Afast = kfast * dose_fast
         Aslow = kslow * dose_slow
-        Aprot = alpha_prot * protein_g
+        Aprot = settings["alpha_prot"] * protein_g
 
-        profile = DoseProfile(Afast, kfast, Aslow, kslow, Aprot, kprot)
+        profile = DoseProfile(Afast, kfast, Aslow, kslow, Aprot, settings["kprot"])
         desserts[name] = {
             "profile": profile,
             "dose_mgdL": profile.total_dose(),
@@ -508,12 +525,21 @@ def ensure_directories() -> None:
     TABLE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def save_line_plot(x: Sequence[float], y: Sequence[float], path: Path, title: str, ylabel: str) -> None:
+def save_line_plot(
+    x: Sequence[float],
+    y: Sequence[float],
+    path: Path,
+    title: str,
+    ylabel: str,
+    xlim: Tuple[float, float] | None = None,
+) -> None:
     plt.figure(figsize=(6.0, 3.4))
     plt.plot(x, y, lw=1.8)
     plt.title(title)
     plt.xlabel("Time (min)")
     plt.ylabel(ylabel)
+    if xlim is not None:
+        plt.xlim(*xlim)
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(path, dpi=300)
@@ -551,23 +577,30 @@ def make_dose_curves(profile: DoseProfile, duration: float = 360.0, step: float 
     return times, fast, slow, total
 
 
-def save_d_components(name: str, profile: DoseProfile) -> Path:
-    times, fast, slow, total = make_dose_curves(profile)
-    path = FIG_DIR / f"D_components_{name}.png"
-    plt.figure(figsize=(6.0, 3.4))
-    plt.plot(times, fast, label="fast", lw=1.6)
-    plt.plot(times, slow, label="slow", lw=1.6)
-    plt.plot(times, total, label="total", lw=2.0, linestyle="--")
-    plt.title(f"{name.title()} appearance components")
-    plt.xlabel("Time (min)")
-    plt.ylabel("D(t) (mg/dL·min⁻¹)")
-    plt.xlim(0.0, 360.0)
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(path, dpi=300)
-    plt.close()
-    return path
+def save_d_components(name: str, profile: DoseProfile, plot_window: float, t_end: float) -> Tuple[Path, Path]:
+    times, fast, slow, total = make_dose_curves(profile, duration=t_end)
+    zoom_path = FIG_DIR / f"D_components_{name}.png"
+    full_path = FIG_DIR / f"D_components_{name}_full.png"
+    limits = [
+        (zoom_path, min(plot_window, t_end)),
+        (full_path, t_end),
+    ]
+    for path, limit in limits:
+        plt.figure(figsize=(6.0, 3.4))
+        plt.plot(times, fast, label="fast", lw=1.6)
+        plt.plot(times, slow, label="slow", lw=1.6)
+        plt.plot(times, total, label="total", lw=2.0, linestyle="--")
+        plt.title(f"{name.title()} appearance components")
+        plt.xlabel("Time (min)")
+        plt.ylabel("D(t) (mg/dL·min⁻¹)")
+        max_xlim = min(limit, times[-1] if times else limit)
+        plt.xlim(0.0, max_xlim)
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(path, dpi=300)
+        plt.close()
+    return zoom_path, full_path
 
 
 def write_summary(rows: List[Dict[str, object]], latex: bool = False) -> None:
@@ -653,6 +686,7 @@ def run_pipeline(
     params: Dict[str, float],
     dt: float,
     t_end: float,
+    plot_window_min: float,
     desserts: Dict[str, Dict[str, float | str | None | DoseProfile]],
     calibrate: bool,
     latex: bool,
@@ -670,6 +704,9 @@ def run_pipeline(
 
     nutrition_mode = "nutrition" if nutrition_enabled else "legacy"
 
+    zoom_xlim = (0.0, min(plot_window_min, t_end))
+    full_xlim = (0.0, t_end)
+
     for name, specs in desserts.items():
         base_profile = specs["profile"]
         if calibrate:
@@ -685,7 +722,7 @@ def run_pipeline(
         metrics = compute_metrics(result, params)
         glucose_curves.append((name, result.times, result.glucose))
         insulin_curves.append((name, result.times, result.insulin))
-        dose_times, _, _, dose_total = make_dose_curves(final_profile)
+        dose_times, _, _, dose_total = make_dose_curves(final_profile, duration=t_end)
         dose_curves.append((name, dose_times, dose_total))
 
         final_dose = final_profile.total_dose()
@@ -727,11 +764,43 @@ def run_pipeline(
         )
 
         glucose_path = FIG_DIR / f"{name}_glucose.png"
+        glucose_full_path = FIG_DIR / f"{name}_glucose_full.png"
         insulin_path = FIG_DIR / f"{name}_insulin.png"
-        components_path = save_d_components(name, final_profile)
+        insulin_full_path = FIG_DIR / f"{name}_insulin_full.png"
+        components_zoom, components_full = save_d_components(name, final_profile, plot_window_min, t_end)
 
-        save_line_plot(result.times, result.glucose, glucose_path, f"{name.title()} glucose", "Glucose (mg/dL)")
-        save_line_plot(result.times, result.insulin, insulin_path, f"{name.title()} insulin", "Insulin (mU/L)")
+        save_line_plot(
+            result.times,
+            result.glucose,
+            glucose_path,
+            f"{name.title()} glucose",
+            "Glucose (mg/dL)",
+            xlim=zoom_xlim,
+        )
+        save_line_plot(
+            result.times,
+            result.glucose,
+            glucose_full_path,
+            f"{name.title()} glucose",
+            "Glucose (mg/dL)",
+            xlim=full_xlim,
+        )
+        save_line_plot(
+            result.times,
+            result.insulin,
+            insulin_path,
+            f"{name.title()} insulin",
+            "Insulin (mU/L)",
+            xlim=zoom_xlim,
+        )
+        save_line_plot(
+            result.times,
+            result.insulin,
+            insulin_full_path,
+            f"{name.title()} insulin",
+            "Insulin (mU/L)",
+            xlim=full_xlim,
+        )
 
         manifest_entries.extend(
             [
@@ -740,23 +809,65 @@ def run_pipeline(
                     "caption": f"{name.title()} glucose curve",
                 },
                 {
+                    "path": str(glucose_full_path.relative_to(ROOT)),
+                    "caption": f"{name.title()} glucose curve (full)",
+                },
+                {
                     "path": str(insulin_path.relative_to(ROOT)),
                     "caption": f"{name.title()} insulin curve",
                 },
                 {
-                    "path": str(components_path.relative_to(ROOT)),
+                    "path": str(insulin_full_path.relative_to(ROOT)),
+                    "caption": f"{name.title()} insulin curve (full)",
+                },
+                {
+                    "path": str(components_zoom.relative_to(ROOT)),
                     "caption": f"{name.title()} appearance components",
+                },
+                {
+                    "path": str(components_full.relative_to(ROOT)),
+                    "caption": f"{name.title()} appearance components (full)",
                 },
             ]
         )
 
     overlay_glucose = FIG_DIR / "glucose_overlay.png"
+    overlay_glucose_full = FIG_DIR / "glucose_overlay_full.png"
     overlay_insulin = FIG_DIR / "insulin_overlay.png"
+    overlay_insulin_full = FIG_DIR / "insulin_overlay_full.png"
     overlay_dose = FIG_DIR / "D_overlay.png"
+    overlay_dose_full = FIG_DIR / "D_overlay_full.png"
 
-    save_overlay(glucose_curves, overlay_glucose, "Glucose overlay", "Glucose (mg/dL)")
-    save_overlay(insulin_curves, overlay_insulin, "Insulin overlay", "Insulin (mU/L)")
-    save_overlay(dose_curves, overlay_dose, "Dessert appearance D(t)", "Dose (mg/dL·min⁻¹)", xlim=(0.0, 180.0))
+    save_overlay(glucose_curves, overlay_glucose, "Glucose overlay", "Glucose (mg/dL)", xlim=zoom_xlim)
+    save_overlay(
+        glucose_curves,
+        overlay_glucose_full,
+        "Glucose overlay",
+        "Glucose (mg/dL)",
+        xlim=full_xlim,
+    )
+    save_overlay(insulin_curves, overlay_insulin, "Insulin overlay", "Insulin (mU/L)", xlim=zoom_xlim)
+    save_overlay(
+        insulin_curves,
+        overlay_insulin_full,
+        "Insulin overlay",
+        "Insulin (mU/L)",
+        xlim=full_xlim,
+    )
+    save_overlay(
+        dose_curves,
+        overlay_dose,
+        "Dessert appearance D(t)",
+        "Dose (mg/dL·min⁻¹)",
+        xlim=zoom_xlim,
+    )
+    save_overlay(
+        dose_curves,
+        overlay_dose_full,
+        "Dessert appearance D(t)",
+        "Dose (mg/dL·min⁻¹)",
+        xlim=full_xlim,
+    )
 
     manifest_entries.extend(
         [
@@ -765,12 +876,24 @@ def run_pipeline(
                 "caption": "Dessert glucose overlay",
             },
             {
+                "path": str(overlay_glucose_full.relative_to(ROOT)),
+                "caption": "Dessert glucose overlay (full)",
+            },
+            {
                 "path": str(overlay_insulin.relative_to(ROOT)),
                 "caption": "Dessert insulin overlay",
             },
             {
+                "path": str(overlay_insulin_full.relative_to(ROOT)),
+                "caption": "Dessert insulin overlay (full)",
+            },
+            {
                 "path": str(overlay_dose.relative_to(ROOT)),
                 "caption": "Dessert appearance overlay",
+            },
+            {
+                "path": str(overlay_dose_full.relative_to(ROOT)),
+                "caption": "Dessert appearance overlay (full)",
             },
         ]
     )
@@ -781,7 +904,7 @@ def run_pipeline(
 
 def run_sanity(simulator: Simulator, params: Dict[str, float], dt: float, t_end: float) -> None:
     print(f"Running sanity checks with backend={simulator.label}...")
-    zero_profile = DoseProfile(0.0, 1.0, 0.0, 1.0, 0.0, kprot)
+    zero_profile = DoseProfile(0.0, 1.0, 0.0, 1.0, 0.0, nutrition_settings["kprot"])
     baseline = simulator.run(params, dt, t_end, zero_profile)
     half = simulator.run(params, dt / 2.0, t_end, zero_profile)
     g_diff = abs(baseline.glucose[-1] - half.glucose[-1])
@@ -849,6 +972,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--calibrate", action="store_true", help="Calibrate amplitudes to ~50 mg/dL peaks")
     parser.add_argument("--latex", action="store_true", help="Also emit LaTeX summary table")
     parser.add_argument("--no-nutrition", action="store_true", help="Disable nutrition-aware mapping")
+    parser.add_argument("--window", type=float, help="Override plot window (minutes)")
     parser.add_argument(
         "--import-off",
         nargs=3,
@@ -868,6 +992,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     params = load_config(CONFIG_PATH)
     dt = params.pop("dt")
     t_end = params.pop("t_end")
+    plot_window_min = params.pop("plot_window_min", DEFAULT_PLOT_WINDOW)
+    if args.window is not None:
+        plot_window_min = float(args.window)
+    plot_window_min = max(1.0, plot_window_min)
 
     use_nutrition = not args.no_nutrition
     desserts = load_desserts(use_nutrition)
@@ -881,6 +1009,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             params,
             dt,
             t_end,
+            plot_window_min,
             desserts,
             calibrate=args.calibrate,
             latex=args.latex,

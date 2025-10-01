@@ -269,3 +269,6 @@ Graders only need `run.py` + `configs/params.yaml` + `C/` to reproduce.
 - Import from OpenFoodFacts by barcode: `python run.py --import-off alfajor 7791875101598 70`
 - Re-run pipeline after import: `python run.py --all`
 - Notes: fat slows gastric emptying; fiber reduces appearance; protein drives insulin pulse; sugars fraction → faster absorption. All figures/tables regenerate from one command.
+- Zoom plots: `python run.py --all --window 240` (default from `configs/params.yaml`).
+- Full-range plots are emitted alongside zoomed views with the `_full` suffix.
+- Tune realism via parameters in `configs/params.yaml` (`Vd_dL`, `hepatic_first_pass`, `f_app_base`, `beta_fiber`, `beta_fat`, `kfast_base`, `kslow_base`, `alpha_prot`, `kprot`).
