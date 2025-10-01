@@ -6,6 +6,7 @@ import argparse
 import csv
 import ctypes
 import math
+import os
 import platform
 import subprocess
 import sys
@@ -520,52 +521,126 @@ def compute_metrics(result: SimulationResult, params: Dict[str, float]) -> Dict[
     }
 
 
+def ensure_dirs(*paths: os.PathLike[str] | str) -> None:
+    for path in paths:
+        os.makedirs(path, exist_ok=True)
+
+
 def ensure_directories() -> None:
-    FIG_DIR.mkdir(parents=True, exist_ok=True)
-    TABLE_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_dirs(FIG_DIR, TABLE_DIR)
+
+
+def relative_to_root(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return os.path.relpath(path, ROOT)
+
+
+def save_dual(
+    fig: matplotlib.figure.Figure,
+    base_name: str,
+    t: Sequence[float],
+    ys: Sequence[Sequence[float]],
+    window: float,
+    zoom_dir: os.PathLike[str] | str,
+    full_dir: os.PathLike[str] | str,
+    dpi: int,
+) -> None:
+    import numpy as np
+
+    ensure_dirs(zoom_dir, full_dir)
+    t_arr = np.asarray(t, dtype=float)
+    y_arrays = [np.asarray(y, dtype=float) for y in ys]
+    if t_arr.size == 0:
+        t_arr = np.array([0.0, window], dtype=float)
+        if not y_arrays:
+            y_arrays = [np.zeros_like(t_arr)]
+        else:
+            y_arrays = [np.zeros_like(t_arr) for _ in y_arrays]
+    mask = t_arr <= window
+    if not mask.any():
+        mask = np.ones_like(t_arr, dtype=bool)
+    ystack = np.column_stack([arr[mask] for arr in y_arrays])
+    ymin = float(np.nanmin(ystack))
+    ymax = float(np.nanmax(ystack))
+    if not (np.isfinite(ymin) and np.isfinite(ymax)):
+        ymin, ymax = 0.0, 1.0
+    if ymax <= ymin:
+        ymax = ymin + 1.0
+    pad = 0.02 * (ymax - ymin)
+    ymin -= pad
+    ymax += pad
+    ax = fig.axes[0]
+    ax.set_xlim(0.0, window)
+    ax.set_ylim(ymin, ymax)
+    fig.tight_layout()
+    fig.savefig(os.path.join(str(zoom_dir), base_name), dpi=dpi)
+
+    ax.set_xlim(0.0, t_arr[-1])
+    ax.relim()
+    ax.autoscale(axis="y", tight=False)
+    fig.tight_layout()
+    fig.savefig(
+        os.path.join(str(full_dir), base_name.replace(".png", "_full.png")),
+        dpi=dpi,
+    )
 
 
 def save_line_plot(
     x: Sequence[float],
     y: Sequence[float],
-    path: Path,
+    base_name: str,
     title: str,
     ylabel: str,
-    xlim: Tuple[float, float] | None = None,
-) -> None:
-    plt.figure(figsize=(6.0, 3.4))
-    plt.plot(x, y, lw=1.8)
-    plt.title(title)
-    plt.xlabel("Time (min)")
-    plt.ylabel(ylabel)
-    if xlim is not None:
-        plt.xlim(*xlim)
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(path, dpi=300)
-    plt.close()
+    window: float,
+    zoom_dir: os.PathLike[str] | str,
+    full_dir: os.PathLike[str] | str,
+    dpi: int,
+) -> Tuple[Path, Path]:
+    fig, ax = plt.subplots(figsize=(6.0, 3.4))
+    ax.plot(x, y, lw=1.8)
+    ax.set_title(title)
+    ax.set_xlabel("Time (min)")
+    ax.set_ylabel(ylabel)
+    ax.grid(True)
+    save_dual(fig, base_name, x, [y], window, zoom_dir, full_dir, dpi)
+    plt.close(fig)
+    return Path(zoom_dir) / base_name, Path(full_dir) / base_name.replace(".png", "_full.png")
 
 
 def save_overlay(
     curves: Iterable[Tuple[str, Sequence[float], Sequence[float]]],
-    path: Path,
+    base_name: str,
     title: str,
     ylabel: str,
-    xlim: Tuple[float, float] | None = None,
-) -> None:
-    plt.figure(figsize=(6.0, 3.4))
+    window: float,
+    zoom_dir: os.PathLike[str] | str,
+    full_dir: os.PathLike[str] | str,
+    dpi: int,
+) -> Tuple[Path, Path]:
+    fig, ax = plt.subplots(figsize=(6.0, 3.4))
+    t_ref: Sequence[float] | None = None
+    y_values: List[Sequence[float]] = []
+    has_curves = False
     for name, x, y in curves:
-        plt.plot(x, y, lw=1.5, label=name)
-    plt.title(title)
-    plt.xlabel("Time (min)")
-    plt.ylabel(ylabel)
-    if xlim is not None:
-        plt.xlim(*xlim)
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(path, dpi=300)
-    plt.close()
+        ax.plot(x, y, lw=1.5, label=name)
+        if t_ref is None:
+            t_ref = x
+        y_values.append(y)
+        has_curves = True
+    if t_ref is None:
+        t_ref = [0.0, window]
+        y_values = [[0.0, 0.0]]
+    ax.set_title(title)
+    ax.set_xlabel("Time (min)")
+    ax.set_ylabel(ylabel)
+    ax.grid(True)
+    if has_curves:
+        ax.legend()
+    save_dual(fig, base_name, t_ref, y_values, window, zoom_dir, full_dir, dpi)
+    plt.close(fig)
+    return Path(zoom_dir) / base_name, Path(full_dir) / base_name.replace(".png", "_full.png")
 
 
 def make_dose_curves(profile: DoseProfile, duration: float = 360.0, step: float = 0.5) -> Tuple[List[float], List[float], List[float], List[float]]:
@@ -577,30 +652,29 @@ def make_dose_curves(profile: DoseProfile, duration: float = 360.0, step: float 
     return times, fast, slow, total
 
 
-def save_d_components(name: str, profile: DoseProfile, plot_window: float, t_end: float) -> Tuple[Path, Path]:
+def save_d_components(
+    name: str,
+    profile: DoseProfile,
+    plot_window: float,
+    t_end: float,
+    zoom_dir: os.PathLike[str] | str,
+    full_dir: os.PathLike[str] | str,
+    dpi: int,
+) -> Tuple[Path, Path]:
     times, fast, slow, total = make_dose_curves(profile, duration=t_end)
-    zoom_path = FIG_DIR / f"D_components_{name}.png"
-    full_path = FIG_DIR / f"D_components_{name}_full.png"
-    limits = [
-        (zoom_path, min(plot_window, t_end)),
-        (full_path, t_end),
-    ]
-    for path, limit in limits:
-        plt.figure(figsize=(6.0, 3.4))
-        plt.plot(times, fast, label="fast", lw=1.6)
-        plt.plot(times, slow, label="slow", lw=1.6)
-        plt.plot(times, total, label="total", lw=2.0, linestyle="--")
-        plt.title(f"{name.title()} appearance components")
-        plt.xlabel("Time (min)")
-        plt.ylabel("D(t) (mg/dL·min⁻¹)")
-        max_xlim = min(limit, times[-1] if times else limit)
-        plt.xlim(0.0, max_xlim)
-        plt.grid(True)
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(path, dpi=300)
-        plt.close()
-    return zoom_path, full_path
+    base_name = f"D_components_{name}.png"
+    fig, ax = plt.subplots(figsize=(6.0, 3.4))
+    ax.plot(times, fast, label="fast", lw=1.6)
+    ax.plot(times, slow, label="slow", lw=1.6)
+    ax.plot(times, total, label="total", lw=2.0, linestyle="--")
+    ax.set_title(f"{name.title()} appearance components")
+    ax.set_xlabel("Time (min)")
+    ax.set_ylabel("D(t) (mg/dL·min⁻¹)")
+    ax.grid(True)
+    ax.legend()
+    save_dual(fig, base_name, times, [fast, slow, total], plot_window, zoom_dir, full_dir, dpi)
+    plt.close(fig)
+    return Path(zoom_dir) / base_name, Path(full_dir) / base_name.replace(".png", "_full.png")
 
 
 def write_summary(rows: List[Dict[str, object]], latex: bool = False) -> None:
@@ -687,12 +761,16 @@ def run_pipeline(
     dt: float,
     t_end: float,
     plot_window_min: float,
+    plot_zoom_dir: Path,
+    plot_full_dir: Path,
+    dpi: int,
     desserts: Dict[str, Dict[str, float | str | None | DoseProfile]],
     calibrate: bool,
     latex: bool,
     nutrition_enabled: bool,
 ) -> None:
     ensure_directories()
+    ensure_dirs(plot_zoom_dir, plot_full_dir)
     summary_rows: List[Dict[str, object]] = []
     glucose_curves: List[Tuple[str, List[float], List[float]]] = []
     insulin_curves: List[Tuple[str, List[float], List[float]]] = []
@@ -703,9 +781,6 @@ def run_pipeline(
     print(f"Running dessert pipeline ({mode_label}) with backend={simulator.label}...")
 
     nutrition_mode = "nutrition" if nutrition_enabled else "legacy"
-
-    zoom_xlim = (0.0, min(plot_window_min, t_end))
-    full_xlim = (0.0, t_end)
 
     for name, specs in desserts.items():
         base_profile = specs["profile"]
@@ -763,136 +838,128 @@ def run_pipeline(
             f"AUCG={metrics['AUCG']:.1f} | peakI={metrics['peakI']:.2f}"
         )
 
-        glucose_path = FIG_DIR / f"{name}_glucose.png"
-        glucose_full_path = FIG_DIR / f"{name}_glucose_full.png"
-        insulin_path = FIG_DIR / f"{name}_insulin.png"
-        insulin_full_path = FIG_DIR / f"{name}_insulin_full.png"
-        components_zoom, components_full = save_d_components(name, final_profile, plot_window_min, t_end)
-
-        save_line_plot(
+        glucose_base = f"{name}_glucose.png"
+        insulin_base = f"{name}_insulin.png"
+        glucose_zoom, glucose_full = save_line_plot(
             result.times,
             result.glucose,
-            glucose_path,
+            glucose_base,
             f"{name.title()} glucose",
             "Glucose (mg/dL)",
-            xlim=zoom_xlim,
+            plot_window_min,
+            plot_zoom_dir,
+            plot_full_dir,
+            dpi,
         )
-        save_line_plot(
-            result.times,
-            result.glucose,
-            glucose_full_path,
-            f"{name.title()} glucose",
-            "Glucose (mg/dL)",
-            xlim=full_xlim,
-        )
-        save_line_plot(
+        insulin_zoom, insulin_full = save_line_plot(
             result.times,
             result.insulin,
-            insulin_path,
+            insulin_base,
             f"{name.title()} insulin",
             "Insulin (mU/L)",
-            xlim=zoom_xlim,
+            plot_window_min,
+            plot_zoom_dir,
+            plot_full_dir,
+            dpi,
         )
-        save_line_plot(
-            result.times,
-            result.insulin,
-            insulin_full_path,
-            f"{name.title()} insulin",
-            "Insulin (mU/L)",
-            xlim=full_xlim,
+        components_zoom, components_full = save_d_components(
+            name,
+            final_profile,
+            plot_window_min,
+            t_end,
+            plot_zoom_dir,
+            plot_full_dir,
+            dpi,
         )
 
         manifest_entries.extend(
             [
                 {
-                    "path": str(glucose_path.relative_to(ROOT)),
+                    "path": relative_to_root(glucose_zoom),
                     "caption": f"{name.title()} glucose curve",
                 },
                 {
-                    "path": str(glucose_full_path.relative_to(ROOT)),
+                    "path": relative_to_root(glucose_full),
                     "caption": f"{name.title()} glucose curve (full)",
                 },
                 {
-                    "path": str(insulin_path.relative_to(ROOT)),
+                    "path": relative_to_root(insulin_zoom),
                     "caption": f"{name.title()} insulin curve",
                 },
                 {
-                    "path": str(insulin_full_path.relative_to(ROOT)),
+                    "path": relative_to_root(insulin_full),
                     "caption": f"{name.title()} insulin curve (full)",
                 },
                 {
-                    "path": str(components_zoom.relative_to(ROOT)),
+                    "path": relative_to_root(components_zoom),
                     "caption": f"{name.title()} appearance components",
                 },
                 {
-                    "path": str(components_full.relative_to(ROOT)),
+                    "path": relative_to_root(components_full),
                     "caption": f"{name.title()} appearance components (full)",
                 },
             ]
         )
 
-    overlay_glucose = FIG_DIR / "glucose_overlay.png"
-    overlay_glucose_full = FIG_DIR / "glucose_overlay_full.png"
-    overlay_insulin = FIG_DIR / "insulin_overlay.png"
-    overlay_insulin_full = FIG_DIR / "insulin_overlay_full.png"
-    overlay_dose = FIG_DIR / "D_overlay.png"
-    overlay_dose_full = FIG_DIR / "D_overlay_full.png"
+    overlay_glucose_base = "glucose_overlay.png"
+    overlay_insulin_base = "insulin_overlay.png"
+    overlay_dose_base = "D_overlay.png"
 
-    save_overlay(glucose_curves, overlay_glucose, "Glucose overlay", "Glucose (mg/dL)", xlim=zoom_xlim)
-    save_overlay(
+    overlay_glucose, overlay_glucose_full = save_overlay(
         glucose_curves,
-        overlay_glucose_full,
+        overlay_glucose_base,
         "Glucose overlay",
         "Glucose (mg/dL)",
-        xlim=full_xlim,
+        plot_window_min,
+        plot_zoom_dir,
+        plot_full_dir,
+        dpi,
     )
-    save_overlay(insulin_curves, overlay_insulin, "Insulin overlay", "Insulin (mU/L)", xlim=zoom_xlim)
-    save_overlay(
+    overlay_insulin, overlay_insulin_full = save_overlay(
         insulin_curves,
-        overlay_insulin_full,
+        overlay_insulin_base,
         "Insulin overlay",
         "Insulin (mU/L)",
-        xlim=full_xlim,
+        plot_window_min,
+        plot_zoom_dir,
+        plot_full_dir,
+        dpi,
     )
-    save_overlay(
+    overlay_dose, overlay_dose_full = save_overlay(
         dose_curves,
-        overlay_dose,
+        overlay_dose_base,
         "Dessert appearance D(t)",
         "Dose (mg/dL·min⁻¹)",
-        xlim=zoom_xlim,
-    )
-    save_overlay(
-        dose_curves,
-        overlay_dose_full,
-        "Dessert appearance D(t)",
-        "Dose (mg/dL·min⁻¹)",
-        xlim=full_xlim,
+        plot_window_min,
+        plot_zoom_dir,
+        plot_full_dir,
+        dpi,
     )
 
     manifest_entries.extend(
         [
             {
-                "path": str(overlay_glucose.relative_to(ROOT)),
+                "path": relative_to_root(overlay_glucose),
                 "caption": "Dessert glucose overlay",
             },
             {
-                "path": str(overlay_glucose_full.relative_to(ROOT)),
+                "path": relative_to_root(overlay_glucose_full),
                 "caption": "Dessert glucose overlay (full)",
             },
             {
-                "path": str(overlay_insulin.relative_to(ROOT)),
+                "path": relative_to_root(overlay_insulin),
                 "caption": "Dessert insulin overlay",
             },
             {
-                "path": str(overlay_insulin_full.relative_to(ROOT)),
+                "path": relative_to_root(overlay_insulin_full),
                 "caption": "Dessert insulin overlay (full)",
             },
             {
-                "path": str(overlay_dose.relative_to(ROOT)),
+                "path": relative_to_root(overlay_dose),
                 "caption": "Dessert appearance overlay",
             },
             {
-                "path": str(overlay_dose_full.relative_to(ROOT)),
+                "path": relative_to_root(overlay_dose_full),
                 "caption": "Dessert appearance overlay (full)",
             },
         ]
@@ -972,7 +1039,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--calibrate", action="store_true", help="Calibrate amplitudes to ~50 mg/dL peaks")
     parser.add_argument("--latex", action="store_true", help="Also emit LaTeX summary table")
     parser.add_argument("--no-nutrition", action="store_true", help="Disable nutrition-aware mapping")
-    parser.add_argument("--window", type=float, help="Override plot window (minutes)")
+    parser.add_argument("--window", type=int, help="Override plot window (minutes)")
+    parser.add_argument("--dpi", type=int, default=150, help="Override plot DPI (default 150)")
     parser.add_argument(
         "--import-off",
         nargs=3,
@@ -992,10 +1060,21 @@ def main(argv: Sequence[str] | None = None) -> None:
     params = load_config(CONFIG_PATH)
     dt = params.pop("dt")
     t_end = params.pop("t_end")
-    plot_window_min = params.pop("plot_window_min", DEFAULT_PLOT_WINDOW)
+    plot_window_min = float(params.pop("plot_window_min", DEFAULT_PLOT_WINDOW))
+    plot_zoom_dir_raw = params.pop("plot_zoom_dir", "figures/zoom")
+    plot_full_dir_raw = params.pop("plot_full_dir", "figures/full")
     if args.window is not None:
         plot_window_min = float(args.window)
     plot_window_min = max(1.0, plot_window_min)
+
+    plot_zoom_dir = Path(plot_zoom_dir_raw)
+    if not plot_zoom_dir.is_absolute():
+        plot_zoom_dir = ROOT / plot_zoom_dir
+    plot_full_dir = Path(plot_full_dir_raw)
+    if not plot_full_dir.is_absolute():
+        plot_full_dir = ROOT / plot_full_dir
+
+    dpi = max(1, args.dpi)
 
     use_nutrition = not args.no_nutrition
     desserts = load_desserts(use_nutrition)
@@ -1010,6 +1089,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             dt,
             t_end,
             plot_window_min,
+            plot_zoom_dir,
+            plot_full_dir,
+            dpi,
             desserts,
             calibrate=args.calibrate,
             latex=args.latex,

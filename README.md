@@ -199,6 +199,15 @@ $env:Path += ";C:\msys64\mingw64\bin"
 gcc -shared -O2 -std=c11 -o C\model.dll C\model.c
 ```
 
+---
+
+## Zoom vs full plots
+
+- Default window is configured via `plot_window_min` in `configs/params.yaml`.
+- Override the zoom horizon: `python run.py --all --window 180`.
+- Set output DPI: `python run.py --all --dpi 200`.
+- Outputs are saved under `figures/zoom/...` (0–window) and `figures/full/...` (0–t_end).
+
 **`pip` blocked (PEP 668 / externally managed)**
 Use a venv:
 

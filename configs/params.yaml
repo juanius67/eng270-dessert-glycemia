@@ -9,6 +9,8 @@ Ib: 7
 dt: 0.5
 t_end: 1440
 plot_window_min: 240          # zoomed plots show 0–240 min
+plot_zoom_dir: "figures/zoom"
+plot_full_dir: "figures/full"
 
 # Nutrition→kinetics mapping (tunable)
 Vd_dL: 120.0                  # larger distribution volume
