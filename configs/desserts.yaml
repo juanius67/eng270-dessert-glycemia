@@ -1,32 +1,32 @@
-alfajor:
-  portion_g: 70
-  carbs_g:   37.0
-  sugars_g:  26.6
-  fiber_g:    1.0
-  fat_g:     12.0
-  protein_g:  5.0
-  barcode: "7791875101598"
 acai_bowl:
-  portion_g: 200
-  carbs_g:   48.0
-  sugars_g:  34.0
-  fiber_g:    6.0
-  fat_g:      9.0
-  protein_g:  4.0
-  barcode: "9120054751695"
+  barcode: '9120054751695'
+  carbs_g: 120.0
+  fat_g: 18.0
+  fiber_g: 0.0
+  portion_g: 200.0
+  protein_g: 24.0
+  sugars_g: 36.0
+alfajor:
+  barcode: '7791875101598'
+  carbs_g: 37.0
+  fat_g: 12.0
+  fiber_g: 1.7
+  portion_g: 70.0
+  protein_g: 5.0
+  sugars_g: 27.0
 brigadeiro:
-  portion_g: 30
-  carbs_g:   20.0
-  sugars_g:  15.0
-  fiber_g:    0.5
-  fat_g:      4.0
-  protein_g:  2.0
-  barcode: "7896434920662"
+  barcode: '7896434920662'
+  carbs_g: 19.8
+  fat_g: 0.6
+  fiber_g: 0.3
+  portion_g: 30.0
+  protein_g: 0.6
+  sugars_g: 15.3
 chocotorta:
+  barcode: '7790580142179'
+  carbs_g: 50.0
+  fat_g: 18.0
+  fiber_g: 3.0
   portion_g: 120
-  carbs_g:   50.0
-  sugars_g:  30.0
-  fiber_g:    3.0
-  fat_g:     18.0
-  protein_g:  6.0
-  barcode: "7790580142179"
+  protein_g: 6.0
+  sugars_g: 30.0
