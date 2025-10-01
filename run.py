@@ -39,6 +39,7 @@ LIB_LIN = ROOT / "C" / "libmodel.so"
 LIB_MAC = ROOT / "C" / "libmodel.dylib"
 BUILD_META = BUILD_DIR / "build.json"
 ENV_JSON = BUILD_DIR / "env.json"
+SANITY_JSON = BUILD_DIR / "sanity.json"
 
 
 def sha256(path: os.PathLike[str] | str) -> str:
@@ -199,6 +200,7 @@ def save_env() -> None:
         "release": platform.release(),
         "machine": platform.machine(),
         "python_version": sys.version,
+        "pointer_bits": struct.calcsize("P") * 8,
     }
 
     try:
@@ -334,6 +336,15 @@ class SimulationResult:
     glucose: List[float]
     insulin: List[float]
     profile: DoseProfile
+
+
+@dataclass
+class DessertRun:
+    name: str
+    result: SimulationResult
+    mode: str
+    converged: bool
+    specs: Dict[str, float | str | None | DoseProfile]
 
 
 class Simulator:
@@ -635,6 +646,38 @@ def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+def simulate_desserts(
+    simulator: Simulator,
+    params: Dict[str, float],
+    dt: float,
+    t_end: float,
+    desserts: Dict[str, Dict[str, float | str | None | DoseProfile]],
+    calibrate: bool,
+) -> List[DessertRun]:
+    runs: List[DessertRun] = []
+    for name, specs in sorted(desserts.items()):
+        base_profile = specs["profile"]
+        if calibrate:
+            result, converged = calibrate_profile(
+                simulator, params, dt, t_end, base_profile
+            )
+            mode = "calibrated"
+        else:
+            result = simulator.run(params, dt, t_end, base_profile)
+            converged = False
+            mode = "dose-driven"
+        runs.append(
+            DessertRun(
+                name=name,
+                result=result,
+                mode=mode,
+                converged=converged,
+                specs=specs,
+            )
+        )
+    return runs
+
+
 def calibrate_profile(
     simulator: Simulator,
     params: Dict[str, float],
@@ -693,22 +736,43 @@ def integrate_trapezoid(
     return total
 
 
-def compute_metrics(result: SimulationResult, params: Dict[str, float]) -> Dict[str, float]:
-    peakG = max(result.glucose)
-    t_peakG = result.times[result.glucose.index(peakG)]
-    peakI = max(result.insulin)
-    t_peakI = result.times[result.insulin.index(peakI)]
-    peak_delta = peakG - params["Gb"]
-    aucg = integrate_trapezoid(result.times, result.glucose, 120.0, subtract=params["Gb"], clamp_zero=True)
-    auci = integrate_trapezoid(result.times, result.insulin, 120.0)
+def compute_metrics(
+    result: SimulationResult, params: Dict[str, float]
+) -> Dict[str, float]:
+    times = result.times
+    glucose = result.glucose
+    insulin = result.insulin
+    peak_g = max(glucose)
+    t_peak_g = times[glucose.index(peak_g)] if glucose else float("nan")
+    peak_i = max(insulin)
+    t_peak_i = times[insulin.index(peak_i)] if insulin else float("nan")
+    gb = params["Gb"]
+    nadir_window = [g for t, g in zip(times, glucose) if t <= 240.0]
+    nadir_g = min(nadir_window) if nadir_window else float("nan")
+
+    baseline_return = float("nan")
+    for t, g in zip(times, glucose):
+        if abs(g - gb) <= 5.0:
+            baseline_return = t
+            break
+
+    iauc_120 = integrate_trapezoid(times, glucose, 120.0, subtract=gb, clamp_zero=True)
+    iauc_240 = integrate_trapezoid(times, glucose, 240.0, subtract=gb, clamp_zero=True)
+    aucg_240 = integrate_trapezoid(times, glucose, 240.0)
+    auci_240 = integrate_trapezoid(times, insulin, 240.0)
+
     return {
-        "peakG": peakG,
-        "t_peakG": t_peakG,
-        "peak_delta": peak_delta,
-        "peakI": peakI,
-        "t_peakI": t_peakI,
-        "AUCG": aucg,
-        "AUCI": auci,
+        "peak_G": peak_g,
+        "t_peak_G": t_peak_g,
+        "peak_delta": peak_g - gb,
+        "nadir_G_0_240": nadir_g,
+        "baseline_return_min": baseline_return,
+        "iAUC_0_120": iauc_120,
+        "iAUC_0_240": iauc_240,
+        "AUCG_0_240": aucg_240,
+        "peak_I": peak_i,
+        "t_peak_I": t_peak_i,
+        "AUCI_0_240": auci_240,
     }
 
 
@@ -871,21 +935,20 @@ def save_d_components(
 def write_summary(rows: List[Dict[str, object]], latex: bool = False) -> None:
     base_fields = [
         "name",
-        "backend",
         "mode",
-        "peak_delta",
-        "t_peakG",
-        "AUCG_0_120",
-        "peakI",
-        "t_peakI",
-        "AUCI_0_120",
-        "dose_mgdL",
-        "Afast",
-        "Aslow",
-        "Aprot",
-        "kfast",
-        "kslow",
-        "kprot",
+        "backend",
+        "Gb",
+        "Ib",
+        "peak_G",
+        "t_peak_G",
+        "nadir_G_0_240",
+        "baseline_return_min",
+        "iAUC_0_120",
+        "iAUC_0_240",
+        "AUCG_0_240",
+        "peak_I",
+        "t_peak_I",
+        "AUCI_0_240",
         "carbs_g",
         "sugars_g",
         "fiber_g",
@@ -894,6 +957,14 @@ def write_summary(rows: List[Dict[str, object]], latex: bool = False) -> None:
         "f_fast",
         "f_app",
         "k_mod",
+        "kfast",
+        "kslow",
+        "dose_mgdL",
+        "Afast",
+        "Aslow",
+        "Aprot",
+        "peak_delta",
+        "kprot",
         "portion_g",
         "barcode",
     ]
@@ -915,10 +986,10 @@ def write_summary(rows: List[Dict[str, object]], latex: bool = False) -> None:
             ("name", "name", "{value}"),
             ("mode", "mode", "{value}"),
             ("peak_delta", "peakΔG", "{value:.2f}"),
-            ("t_peakG", "t$_{peak}$", "{value:.1f}"),
-            ("AUCG_0_120", "AUCG", "{value:.1f}"),
-            ("peakI", "peakI", "{value:.2f}"),
-            ("t_peakI", "t$_{peakI}$", "{value:.1f}"),
+            ("t_peak_G", "t$_{peak}$", "{value:.1f}"),
+            ("iAUC_0_120", "iAUC$_{0-120}$", "{value:.1f}"),
+            ("peak_I", "peakI", "{value:.2f}"),
+            ("t_peak_I", "t$_{peakI}$", "{value:.1f}"),
         ]
         with latex_path.open("w", encoding="utf-8") as handle:
             handle.write("% Auto-generated summary table\n")
@@ -976,16 +1047,13 @@ def run_pipeline(
 
     nutrition_mode = "nutrition" if nutrition_enabled else "legacy"
 
-    for name, specs in desserts.items():
-        base_profile = specs["profile"]
-        if calibrate:
-            result, converged = calibrate_profile(simulator, params, dt, t_end, base_profile)
-            mode = "calibrated"
-        else:
-            result = simulator.run(params, dt, t_end, base_profile)
-            mode = "dose-driven"
-            converged = False
+    runs = simulate_desserts(simulator, params, dt, t_end, desserts, calibrate)
 
+    for run in runs:
+        name = run.name
+        specs = run.specs
+        result = run.result
+        mode = run.mode
         final_profile = result.profile
 
         metrics = compute_metrics(result, params)
@@ -1001,12 +1069,18 @@ def run_pipeline(
             "backend": simulator.label,
             "mode": mode,
             "nutrition_mode": nutrition_mode,
-            "peak_delta": metrics["peak_delta"],
-            "t_peakG": metrics["t_peakG"],
-            "AUCG_0_120": metrics["AUCG"],
-            "peakI": metrics["peakI"],
-            "t_peakI": metrics["t_peakI"],
-            "AUCI_0_120": metrics["AUCI"],
+            "Gb": params["Gb"],
+            "Ib": params["Ib"],
+            "peak_G": metrics["peak_G"],
+            "t_peak_G": metrics["t_peak_G"],
+            "nadir_G_0_240": metrics["nadir_G_0_240"],
+            "baseline_return_min": metrics["baseline_return_min"],
+            "iAUC_0_120": metrics["iAUC_0_120"],
+            "iAUC_0_240": metrics["iAUC_0_240"],
+            "AUCG_0_240": metrics["AUCG_0_240"],
+            "peak_I": metrics["peak_I"],
+            "t_peak_I": metrics["t_peak_I"],
+            "AUCI_0_240": metrics["AUCI_0_240"],
             "dose_mgdL": final_dose,
             "Afast": final_profile.Afast,
             "Aslow": final_profile.Aslow,
@@ -1024,16 +1098,16 @@ def run_pipeline(
             "k_mod": specs.get("k_mod"),
             "portion_g": specs.get("portion_g"),
             "barcode": specs.get("barcode"),
-            "peakG": metrics["peakG"],
+            "peak_delta": metrics["peak_delta"],
         }
         if calibrate:
-            summary_row["calibration_converged"] = converged
+            summary_row["calibration_converged"] = run.converged
         summary_rows.append(summary_row)
 
         print(
             f"{name:12s} | backend={simulator.label:6s} | mode={mode:11s} | "
-            f"nutrition={nutrition_mode:8s} | peakΔG={metrics['peak_delta']:+6.2f} mg/dL @ {metrics['t_peakG']:.1f} min | "
-            f"AUCG={metrics['AUCG']:.1f} | peakI={metrics['peakI']:.2f}"
+            f"nutrition={nutrition_mode:8s} | peakΔG={metrics['peak_delta']:+6.2f} mg/dL @ {metrics['t_peak_G']:.1f} min | "
+            f"iAUC₀₋₁₂₀={metrics['iAUC_0_120']:.1f} | peakI={metrics['peak_I']:.2f}"
         )
 
         if emit_plots:
@@ -1169,19 +1243,97 @@ def run_pipeline(
     if emit_plots and manifest_entries and not summary_only:
         write_manifest(manifest_entries)
 
+    return runs
 
-def run_sanity(simulator: Simulator, params: Dict[str, float], dt: float, t_end: float) -> None:
+
+def run_sanity(
+    simulator: Simulator,
+    params: Dict[str, float],
+    dt: float,
+    t_end: float,
+    desserts: Dict[str, Dict[str, float | str | None | DoseProfile]],
+    runs: List[DessertRun] | None,
+    calibrate: bool,
+) -> None:
     print(f"Running sanity checks with backend={simulator.label}...")
-    zero_profile = DoseProfile(0.0, 1.0, 0.0, 1.0, 0.0, nutrition_settings["kprot"])
-    baseline = simulator.run(params, dt, t_end, zero_profile)
-    half = simulator.run(params, dt / 2.0, t_end, zero_profile)
-    g_diff = abs(baseline.glucose[-1] - half.glucose[-1])
-    i_diff = abs(baseline.insulin[-1] - half.insulin[-1])
-    print(
-        f"Baseline final G={baseline.glucose[-1]:.6f}, I={baseline.insulin[-1]:.6f}; "
-        f"dt/2 final G={half.glucose[-1]:.6f}, I={half.insulin[-1]:.6f}"
-    )
-    print(f"Final-state diffs | ΔG={g_diff:.6e}, ΔI={i_diff:.6e}")
+
+    if runs is None:
+        runs = simulate_desserts(simulator, params, dt, t_end, desserts, calibrate)
+
+    run_map = {run.name: run for run in runs}
+    ordered_names = sorted(desserts.keys())
+    dt_check: Dict[str, Any]
+
+    if ordered_names:
+        first_name = ordered_names[0]
+        base_profile = desserts[first_name]["profile"]
+        base_result = simulator.run(params, dt, t_end, base_profile)
+        half_result = simulator.run(params, dt / 2.0, t_end, base_profile)
+        base_metrics = compute_metrics(base_result, params)
+        half_metrics = compute_metrics(half_result, params)
+        peak_diff = abs(base_metrics["peak_G"] - half_metrics["peak_G"])
+        t_peak_diff = abs(base_metrics["t_peak_G"] - half_metrics["t_peak_G"])
+        passed = peak_diff <= 1.0 and t_peak_diff <= 2.0
+        dt_check = {
+            "dessert": first_name,
+            "peak_G_base": base_metrics["peak_G"],
+            "peak_G_dt_half": half_metrics["peak_G"],
+            "t_peak_base": base_metrics["t_peak_G"],
+            "t_peak_dt_half": half_metrics["t_peak_G"],
+            "peak_diff": peak_diff,
+            "t_peak_diff": t_peak_diff,
+            "passed": passed,
+        }
+        status = "PASS" if passed else "FAIL"
+        print(
+            f"dt-halving ({first_name}): peakΔ={peak_diff:.3f} mg/dL, tΔ={t_peak_diff:.3f} min -> {status}"
+        )
+        if not passed:
+            raise AssertionError(
+                "dt-halving check failed: Δpeak_G>1 mg/dL or Δt_peak>2 min"
+            )
+    else:
+        dt_check = {"status": "skipped", "reason": "no desserts configured"}
+        print("dt-halving check skipped (no desserts configured)")
+
+    end_state_entries: List[Dict[str, Any]] = []
+    gb = params["Gb"]
+    ib = params["Ib"]
+    for name, run in sorted(run_map.items()):
+        final_g = run.result.glucose[-1]
+        final_i = run.result.insulin[-1]
+        g_diff = abs(final_g - gb)
+        i_diff = abs(final_i - ib)
+        passed = g_diff <= 5.0 and i_diff <= 0.5
+        end_state_entries.append(
+            {
+                "name": name,
+                "mode": run.mode,
+                "final_G": final_g,
+                "final_I": final_i,
+                "delta_G": g_diff,
+                "delta_I": i_diff,
+                "passed": passed,
+            }
+        )
+        status = "PASS" if passed else "FAIL"
+        print(
+            f"end-state ({name}): |ΔG|={g_diff:.3f} mg/dL, |ΔI|={i_diff:.3f} μU/mL -> {status}"
+        )
+
+    report = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "backend": simulator.label,
+        "pipeline_mode": "calibrated" if calibrate else "dose-driven",
+        "checks": {
+            "dt_halving": dt_check,
+            "end_state": end_state_entries,
+        },
+    }
+
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    write_json(SANITY_JSON, report)
+    print(f"Wrote {SANITY_JSON}")
 
 
 def fetch_off_product(barcode: str) -> Dict[str, object]:
@@ -1352,8 +1504,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.reproduce and args.calibrate:
         print("Reproduction mode enforces dose-driven simulations; ignoring --calibrate.")
 
+    pipeline_runs: List[DessertRun] | None = None
+
     if pipeline_requested:
-        run_pipeline(
+        pipeline_runs = run_pipeline(
             simulator,
             params,
             dt,
@@ -1369,8 +1523,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             emit_plots=emit_plots,
             summary_only=args.summary_only,
         )
-    if args.sanity:
-        run_sanity(simulator, params, dt, t_end)
+    if pipeline_requested or args.sanity:
+        run_sanity(simulator, params, dt, t_end, desserts, pipeline_runs, calibrate)
 
 
 if __name__ == "__main__":

@@ -291,3 +291,14 @@ Graders only need `run.py` + `configs/params.yaml` + `C/` to reproduce.
 - Zoom plots: `python run.py --all --window 240` (default from `configs/params.yaml`).
 - Full-range plots are emitted alongside zoomed views with the `_full` suffix.
 - Tune realism via parameters in `configs/params.yaml` (`Vd_dL`, `hepatic_first_pass`, `f_app_base`, `beta_fiber`, `beta_fat`, `kfast_base`, `kslow_base`, `alpha_prot`, `kprot`).
+
+---
+
+## Grader quick start
+
+* Rebuild and reproduce all dose-driven results: `python run.py --reproduce`
+* Equalized-peaks appendix: `python run.py --all --calibrate`
+* Import nutrition by barcode (snapshot stored in YAML): `python run.py --import-off alfajor 7791875101598 70`
+* Plots: zoom exports in `figures/zoom/`, full-range in `figures/full/`; metrics table in `tables/summary.csv`
+* Build metadata & environment: `build/build.json`, `build/env.json`
+* Sanity report: `build/sanity.json`
