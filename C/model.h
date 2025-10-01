@@ -13,4 +13,14 @@ void derivatives(double t, const double y[], double dydt[], const Params *params
 #endif
 API void simulate(double *G_out, double *I_out,
                   int nsteps, double dt, const Params *p);
+
+// Extended dual-exponential appearance with protein-driven insulin pulse.
+// D(t) = Afast*exp(-kfast t) + Aslow*exp(-kslow t)
+// extra insulin drive from protein: Iprot(t) = Aprot*exp(-kprot t)
+API void simulate_ex(
+    double* G_out, double* I_out, int nsteps, double dt,
+    const Params* prm,
+    double Afast, double kfast,
+    double Aslow, double kslow,
+    double Aprot, double kprot);
 #endif

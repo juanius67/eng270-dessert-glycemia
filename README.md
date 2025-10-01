@@ -261,3 +261,11 @@ Graders only need `run.py` + `configs/params.yaml` + `C/` to reproduce.
   Source: OpenFoodFacts product page and retail listing with nutrition per 100 g.
 - Per-unit cross-check (70 g): ~275 kcal; fat ~12 g; carbs ~37 g; protein ~5 g.
   Source: FatSecret (Havanna Alfajor Súper Dulce de Leche, 70 g).
+
+## Usage
+
+- 24h run (nutrition-aware): `python run.py --all`
+- Equalized peaks (appendix): `python run.py --all --calibrate`
+- Import from OpenFoodFacts by barcode: `python run.py --import-off alfajor 7791875101598 70`
+- Re-run pipeline after import: `python run.py --all`
+- Notes: fat slows gastric emptying; fiber reduces appearance; protein drives insulin pulse; sugars fraction → faster absorption. All figures/tables regenerate from one command.

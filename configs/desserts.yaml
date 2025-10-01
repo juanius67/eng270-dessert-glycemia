@@ -1,11 +1,32 @@
-chocotorta:  { portion_g: 120, carbs_g: 50, sugars_g: 30, fiber_g: 3,  fat_g: 18, protein_g: 6 }
-brigadeiro:  { portion_g:  60, carbs_g: 40, sugars_g: 35, fiber_g: 0,  fat_g:  8, protein_g: 4 }
 alfajor:
   portion_g: 70
   carbs_g:   37.0
-  sugars_g:  26.6   # ≈ 38/100g × 70g (OpenFoodFacts per-100g scaled)
-  fiber_g:    1.0   # label not given; placeholder
+  sugars_g:  26.6
+  fiber_g:    1.0
   fat_g:     12.0
   protein_g:  5.0
-  _source: "OpenFoodFacts EAN 7791875101598 (per-100g) + FatSecret 70g cross-check"
-acai:        { portion_g: 200, carbs_g: 48, sugars_g: 34, fiber_g: 6,  fat_g:  5, protein_g: 4 }
+  barcode: "7791875101598"
+acai_bowl:
+  portion_g: 200
+  carbs_g:   48.0
+  sugars_g:  34.0
+  fiber_g:    6.0
+  fat_g:      9.0
+  protein_g:  4.0
+  barcode: "9120054751695"
+brigadeiro:
+  portion_g: 30
+  carbs_g:   20.0
+  sugars_g:  15.0
+  fiber_g:    0.5
+  fat_g:      4.0
+  protein_g:  2.0
+  barcode: "7896434920662"
+chocotorta:
+  portion_g: 120
+  carbs_g:   50.0
+  sugars_g:  30.0
+  fiber_g:    3.0
+  fat_g:     18.0
+  protein_g:  6.0
+  barcode: "7790580142179"

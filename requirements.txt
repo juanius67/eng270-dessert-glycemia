@@ -3,3 +3,4 @@ matplotlib
 pyyaml
 scipy
 pytest
+requests>=2.31
