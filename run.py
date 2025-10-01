@@ -5,14 +5,19 @@ from __future__ import annotations
 import argparse
 import csv
 import ctypes
+import hashlib
+import json
 import math
 import os
 import platform
+import shutil
+import struct
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import requests
 import yaml
@@ -28,6 +33,216 @@ DESSERTS_CONFIG_PATH = ROOT / "configs" / "desserts.yaml"
 C_DIR = ROOT / "C"
 FIG_DIR = ROOT / "figures"
 TABLE_DIR = ROOT / "tables"
+BUILD_DIR = ROOT / "build"
+LIB_WIN = ROOT / "C" / "model.dll"
+LIB_LIN = ROOT / "C" / "libmodel.so"
+LIB_MAC = ROOT / "C" / "libmodel.dylib"
+BUILD_META = BUILD_DIR / "build.json"
+ENV_JSON = BUILD_DIR / "env.json"
+
+
+def sha256(path: os.PathLike[str] | str) -> str:
+    digest = hashlib.sha256()
+    file_path = Path(path)
+    with file_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def probe_arch() -> Tuple[str, str, int]:
+    system = platform.system()
+    machine = platform.machine()
+    bits = struct.calcsize("P") * 8
+    return system, machine, bits
+
+
+def write_json(path: Path, obj: Any) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(obj, handle, indent=2, sort_keys=True)
+
+
+def read_json(path: Path) -> Dict[str, Any]:
+    try:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def compute_source_hash() -> str:
+    model_c = C_DIR / "model.c"
+    model_h = C_DIR / "model.h"
+    return sha256(model_c) + sha256(model_h)
+
+
+def get_backend_spec() -> Tuple[Path, List[List[str]]]:
+    system = platform.system().lower()
+    if system.startswith("win"):
+        return (
+            LIB_WIN,
+            [
+                ["cl", "/nologo", "/LD", "C\\model.c", "/Fe:C\\model.dll"],
+                ["gcc", "-O3", "-shared", "-fPIC", "C/model.c", "-o", "C/model.dll"],
+            ],
+        )
+    if system == "darwin":
+        return (
+            LIB_MAC,
+            [["clang", "-O3", "-dynamiclib", "C/model.c", "-o", "C/libmodel.dylib"]],
+        )
+    return (
+        LIB_LIN,
+        [["gcc", "-O3", "-shared", "-fPIC", "C/model.c", "-o", "C/libmodel.so"]],
+    )
+
+
+def build_backend() -> Path:
+    lib_path, commands = get_backend_spec()
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    source_hash = compute_source_hash()
+    system, machine, bits = probe_arch()
+    meta = read_json(BUILD_META)
+    if (
+        lib_path.exists()
+        and meta.get("hash") == source_hash
+        and meta.get("system") == system
+        and meta.get("machine") == machine
+        and meta.get("bits") == bits
+        and meta.get("compiler") in {cmd[0] for cmd in commands}
+    ):
+        print(f"C backend already built ({lib_path})")
+        return lib_path
+
+    errors: List[Dict[str, str]] = []
+    for cmd in commands:
+        try:
+            completed = subprocess.run(
+                cmd,
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            errors.append({"cmd": " ".join(cmd), "error": str(exc), "stdout": "", "stderr": ""})
+            continue
+        except subprocess.CalledProcessError as exc:
+            errors.append(
+                {
+                    "cmd": " ".join(cmd),
+                    "error": str(exc),
+                    "stdout": exc.stdout or "",
+                    "stderr": exc.stderr or "",
+                }
+            )
+            continue
+
+        compiler_id = cmd[0]
+        meta = {
+            "hash": source_hash,
+            "system": system,
+            "machine": machine,
+            "bits": bits,
+            "compiler": compiler_id,
+            "built_at": datetime.now(timezone.utc).isoformat(),
+        }
+        write_json(BUILD_META, meta)
+        print(f"Built C backend using {compiler_id}: {lib_path}")
+        if completed.stdout:
+            print(completed.stdout.strip())
+        if completed.stderr:
+            print(completed.stderr.strip())
+        return lib_path
+
+    if errors:
+        last = errors[-1]
+        message_lines = [
+            "Failed to build C backend.",
+            f"Last command: {last['cmd']}",
+            f"error: {last['error']}",
+        ]
+        if last["stdout"]:
+            message_lines.append("stdout:\n" + last["stdout"])
+        if last["stderr"]:
+            message_lines.append("stderr:\n" + last["stderr"])
+        raise RuntimeError("\n".join(message_lines))
+    raise RuntimeError("No suitable compiler command found for building backend.")
+
+
+def ensure_backend() -> Path | None:
+    lib_path, commands = get_backend_spec()
+    source_hash = compute_source_hash()
+    system, machine, bits = probe_arch()
+    meta = read_json(BUILD_META)
+    expected_compilers = {cmd[0] for cmd in commands}
+    if not lib_path.exists():
+        return build_backend()
+    if (
+        meta.get("hash") != source_hash
+        or meta.get("system") != system
+        or meta.get("machine") != machine
+        or meta.get("bits") != bits
+        or meta.get("compiler") not in expected_compilers
+    ):
+        return build_backend()
+    return lib_path
+
+
+def save_env() -> None:
+    env: Dict[str, Any] = {
+        "system": platform.system(),
+        "release": platform.release(),
+        "machine": platform.machine(),
+        "python_version": sys.version,
+    }
+
+    try:
+        import numpy  # type: ignore
+
+        env["numpy_version"] = numpy.__version__
+    except ImportError:
+        pass
+
+    try:
+        import matplotlib as _matplotlib  # type: ignore
+
+        env["matplotlib_version"] = _matplotlib.__version__
+    except ImportError:
+        pass
+
+    meta = read_json(BUILD_META)
+    if meta:
+        env["compiler"] = meta.get("compiler")
+        env["build"] = meta
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        commit = result.stdout.strip()
+        if commit:
+            env["git_commit"] = commit
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    write_json(ENV_JSON, env)
+    print(f"Wrote {ENV_JSON}")
+
+
+def clean_outputs() -> None:
+    for path in (FIG_DIR, TABLE_DIR, BUILD_DIR):
+        if path.exists():
+            shutil.rmtree(path)
+            print(f"Removed {path}")
 
 LEGACY_DESSERTS: Dict[str, Dict[str, float]] = {
     "chocotorta": {"dose_mgdL": 60.0, "k": 0.08},
@@ -304,32 +519,8 @@ class Simulator:
 
 
 def load_backend() -> Tuple[str, ctypes.CDLL | None]:
-    system = platform.system().lower()
-    if system.startswith("win"):
-        lib_path = C_DIR / "model.dll"
-        build_cmds = [
-            ["cl", "/nologo", "/LD", "C\\model.c", "/Fe:C\\model.dll"],
-            ["gcc", "-O3", "-shared", "-o", "C\\model.dll", "C\\model.c"],
-        ]
-    elif system == "darwin":
-        lib_path = C_DIR / "libmodel.dylib"
-        build_cmds = [["clang", "-O3", "-fPIC", "-shared", "-o", "C/libmodel.dylib", "C/model.c"]]
-    else:
-        lib_path = C_DIR / "libmodel.so"
-        build_cmds = [["gcc", "-O3", "-fPIC", "-shared", "-o", "C/libmodel.so", "C/model.c"]]
-
+    lib_path, _ = get_backend_spec()
     lib = try_load_library(lib_path)
-    if lib is None and not lib_path.exists():
-        for cmd in build_cmds:
-            print("Build attempt:", " ".join(cmd))
-            try:
-                subprocess.run(cmd, check=True, cwd=ROOT)
-            except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
-                print(f"  build failed: {exc}")
-                continue
-            lib = try_load_library(lib_path)
-            if lib is not None:
-                break
     if lib is None:
         print("Using pure-Python RK4 backend.")
         return "python", None
@@ -768,9 +959,12 @@ def run_pipeline(
     calibrate: bool,
     latex: bool,
     nutrition_enabled: bool,
+    emit_plots: bool,
+    summary_only: bool,
 ) -> None:
     ensure_directories()
-    ensure_dirs(plot_zoom_dir, plot_full_dir)
+    if emit_plots:
+        ensure_dirs(plot_zoom_dir, plot_full_dir)
     summary_rows: List[Dict[str, object]] = []
     glucose_curves: List[Tuple[str, List[float], List[float]]] = []
     insulin_curves: List[Tuple[str, List[float], List[float]]] = []
@@ -786,25 +980,27 @@ def run_pipeline(
         base_profile = specs["profile"]
         if calibrate:
             result, converged = calibrate_profile(simulator, params, dt, t_end, base_profile)
-            mode = "calibrated" if converged else "calibrated*"
+            mode = "calibrated"
         else:
             result = simulator.run(params, dt, t_end, base_profile)
             mode = "dose-driven"
+            converged = False
 
         final_profile = result.profile
-        full_mode = f"{nutrition_mode}-{mode}"
 
         metrics = compute_metrics(result, params)
-        glucose_curves.append((name, result.times, result.glucose))
-        insulin_curves.append((name, result.times, result.insulin))
-        dose_times, _, _, dose_total = make_dose_curves(final_profile, duration=t_end)
-        dose_curves.append((name, dose_times, dose_total))
+        if emit_plots:
+            glucose_curves.append((name, result.times, result.glucose))
+            insulin_curves.append((name, result.times, result.insulin))
+            dose_times, _, _, dose_total = make_dose_curves(final_profile, duration=t_end)
+            dose_curves.append((name, dose_times, dose_total))
 
         final_dose = final_profile.total_dose()
         summary_row: Dict[str, object] = {
             "name": name,
             "backend": simulator.label,
-            "mode": full_mode,
+            "mode": mode,
+            "nutrition_mode": nutrition_mode,
             "peak_delta": metrics["peak_delta"],
             "t_peakG": metrics["t_peakG"],
             "AUCG_0_120": metrics["AUCG"],
@@ -830,43 +1026,111 @@ def run_pipeline(
             "barcode": specs.get("barcode"),
             "peakG": metrics["peakG"],
         }
+        if calibrate:
+            summary_row["calibration_converged"] = converged
         summary_rows.append(summary_row)
 
         print(
-            f"{name:12s} | backend={simulator.label:6s} | mode={full_mode:18s} | "
-            f"peakΔG={metrics['peak_delta']:+6.2f} mg/dL @ {metrics['t_peakG']:.1f} min | "
+            f"{name:12s} | backend={simulator.label:6s} | mode={mode:11s} | "
+            f"nutrition={nutrition_mode:8s} | peakΔG={metrics['peak_delta']:+6.2f} mg/dL @ {metrics['t_peakG']:.1f} min | "
             f"AUCG={metrics['AUCG']:.1f} | peakI={metrics['peakI']:.2f}"
         )
 
-        glucose_base = f"{name}_glucose.png"
-        insulin_base = f"{name}_insulin.png"
-        glucose_zoom, glucose_full = save_line_plot(
-            result.times,
-            result.glucose,
-            glucose_base,
-            f"{name.title()} glucose",
+        if emit_plots:
+            glucose_base = f"{name}_glucose.png"
+            insulin_base = f"{name}_insulin.png"
+            glucose_zoom, glucose_full = save_line_plot(
+                result.times,
+                result.glucose,
+                glucose_base,
+                f"{name.title()} glucose",
+                "Glucose (mg/dL)",
+                plot_window_min,
+                plot_zoom_dir,
+                plot_full_dir,
+                dpi,
+            )
+            insulin_zoom, insulin_full = save_line_plot(
+                result.times,
+                result.insulin,
+                insulin_base,
+                f"{name.title()} insulin",
+                "Insulin (mU/L)",
+                plot_window_min,
+                plot_zoom_dir,
+                plot_full_dir,
+                dpi,
+            )
+            components_zoom, components_full = save_d_components(
+                name,
+                final_profile,
+                plot_window_min,
+                t_end,
+                plot_zoom_dir,
+                plot_full_dir,
+                dpi,
+            )
+
+            manifest_entries.extend(
+                [
+                    {
+                        "path": relative_to_root(glucose_zoom),
+                        "caption": f"{name.title()} glucose curve",
+                    },
+                    {
+                        "path": relative_to_root(glucose_full),
+                        "caption": f"{name.title()} glucose curve (full)",
+                    },
+                    {
+                        "path": relative_to_root(insulin_zoom),
+                        "caption": f"{name.title()} insulin curve",
+                    },
+                    {
+                        "path": relative_to_root(insulin_full),
+                        "caption": f"{name.title()} insulin curve (full)",
+                    },
+                    {
+                        "path": relative_to_root(components_zoom),
+                        "caption": f"{name.title()} appearance components",
+                    },
+                    {
+                        "path": relative_to_root(components_full),
+                        "caption": f"{name.title()} appearance components (full)",
+                    },
+                ]
+            )
+
+    if emit_plots:
+        overlay_glucose_base = "glucose_overlay.png"
+        overlay_insulin_base = "insulin_overlay.png"
+        overlay_dose_base = "D_overlay.png"
+
+        overlay_glucose, overlay_glucose_full = save_overlay(
+            glucose_curves,
+            overlay_glucose_base,
+            "Glucose overlay",
             "Glucose (mg/dL)",
             plot_window_min,
             plot_zoom_dir,
             plot_full_dir,
             dpi,
         )
-        insulin_zoom, insulin_full = save_line_plot(
-            result.times,
-            result.insulin,
-            insulin_base,
-            f"{name.title()} insulin",
+        overlay_insulin, overlay_insulin_full = save_overlay(
+            insulin_curves,
+            overlay_insulin_base,
+            "Insulin overlay",
             "Insulin (mU/L)",
             plot_window_min,
             plot_zoom_dir,
             plot_full_dir,
             dpi,
         )
-        components_zoom, components_full = save_d_components(
-            name,
-            final_profile,
+        overlay_dose, overlay_dose_full = save_overlay(
+            dose_curves,
+            overlay_dose_base,
+            "Dessert appearance D(t)",
+            "Dose (mg/dL·min⁻¹)",
             plot_window_min,
-            t_end,
             plot_zoom_dir,
             plot_full_dir,
             dpi,
@@ -875,98 +1139,35 @@ def run_pipeline(
         manifest_entries.extend(
             [
                 {
-                    "path": relative_to_root(glucose_zoom),
-                    "caption": f"{name.title()} glucose curve",
+                    "path": relative_to_root(overlay_glucose),
+                    "caption": "Dessert glucose overlay",
                 },
                 {
-                    "path": relative_to_root(glucose_full),
-                    "caption": f"{name.title()} glucose curve (full)",
+                    "path": relative_to_root(overlay_glucose_full),
+                    "caption": "Dessert glucose overlay (full)",
                 },
                 {
-                    "path": relative_to_root(insulin_zoom),
-                    "caption": f"{name.title()} insulin curve",
+                    "path": relative_to_root(overlay_insulin),
+                    "caption": "Dessert insulin overlay",
                 },
                 {
-                    "path": relative_to_root(insulin_full),
-                    "caption": f"{name.title()} insulin curve (full)",
+                    "path": relative_to_root(overlay_insulin_full),
+                    "caption": "Dessert insulin overlay (full)",
                 },
                 {
-                    "path": relative_to_root(components_zoom),
-                    "caption": f"{name.title()} appearance components",
+                    "path": relative_to_root(overlay_dose),
+                    "caption": "Dessert appearance overlay",
                 },
                 {
-                    "path": relative_to_root(components_full),
-                    "caption": f"{name.title()} appearance components (full)",
+                    "path": relative_to_root(overlay_dose_full),
+                    "caption": "Dessert appearance overlay (full)",
                 },
             ]
         )
 
-    overlay_glucose_base = "glucose_overlay.png"
-    overlay_insulin_base = "insulin_overlay.png"
-    overlay_dose_base = "D_overlay.png"
-
-    overlay_glucose, overlay_glucose_full = save_overlay(
-        glucose_curves,
-        overlay_glucose_base,
-        "Glucose overlay",
-        "Glucose (mg/dL)",
-        plot_window_min,
-        plot_zoom_dir,
-        plot_full_dir,
-        dpi,
-    )
-    overlay_insulin, overlay_insulin_full = save_overlay(
-        insulin_curves,
-        overlay_insulin_base,
-        "Insulin overlay",
-        "Insulin (mU/L)",
-        plot_window_min,
-        plot_zoom_dir,
-        plot_full_dir,
-        dpi,
-    )
-    overlay_dose, overlay_dose_full = save_overlay(
-        dose_curves,
-        overlay_dose_base,
-        "Dessert appearance D(t)",
-        "Dose (mg/dL·min⁻¹)",
-        plot_window_min,
-        plot_zoom_dir,
-        plot_full_dir,
-        dpi,
-    )
-
-    manifest_entries.extend(
-        [
-            {
-                "path": relative_to_root(overlay_glucose),
-                "caption": "Dessert glucose overlay",
-            },
-            {
-                "path": relative_to_root(overlay_glucose_full),
-                "caption": "Dessert glucose overlay (full)",
-            },
-            {
-                "path": relative_to_root(overlay_insulin),
-                "caption": "Dessert insulin overlay",
-            },
-            {
-                "path": relative_to_root(overlay_insulin_full),
-                "caption": "Dessert insulin overlay (full)",
-            },
-            {
-                "path": relative_to_root(overlay_dose),
-                "caption": "Dessert appearance overlay",
-            },
-            {
-                "path": relative_to_root(overlay_dose_full),
-                "caption": "Dessert appearance overlay (full)",
-            },
-        ]
-    )
-
     write_summary(summary_rows, latex=latex)
-    write_manifest(manifest_entries)
+    if emit_plots and manifest_entries and not summary_only:
+        write_manifest(manifest_entries)
 
 
 def run_sanity(simulator: Simulator, params: Dict[str, float], dt: float, t_end: float) -> None:
@@ -1012,6 +1213,7 @@ def import_off_entry(name: str, barcode: str, portion_g_raw: str) -> None:
         "portion_g": portion_g,
         "barcode": barcode,
     }
+    per_100g_raw: Dict[str, Any] = {}
     for key, field in MACRO_FIELDS.items():
         value = nutriments.get(field)
         try:
@@ -1020,6 +1222,18 @@ def import_off_entry(name: str, barcode: str, portion_g_raw: str) -> None:
             per100 = 0.0
         scaled = round(per100 * portion_g / 100.0, 1)
         entry[key] = scaled
+        per_100g_raw[field] = value
+
+    brand = product.get("brands")
+    if isinstance(brand, str):
+        brand = brand.split(",")[0].strip()
+    entry["_retrieved_at"] = datetime.now(timezone.utc).isoformat()
+    entry["_brand"] = brand or None
+    entry["_name"] = product.get("product_name")
+    entry["_per_100g_raw"] = per_100g_raw
+    entry["_source_url"] = product.get("url") or (
+        f"https://world.openfoodfacts.org/product/{barcode}"
+    )
 
     if DESSERTS_CONFIG_PATH.exists():
         with DESSERTS_CONFIG_PATH.open("r", encoding="utf-8") as handle:
@@ -1034,11 +1248,26 @@ def import_off_entry(name: str, barcode: str, portion_g_raw: str) -> None:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Dessert glycemia simulator")
+    parser.add_argument("--build", action="store_true", help="Build C backend and exit")
+    parser.add_argument(
+        "--clean", action="store_true", help="Remove generated artifacts and exit"
+    )
+    parser.add_argument(
+        "--reproduce",
+        action="store_true",
+        help="Clean, rebuild, and run the full dose-driven pipeline",
+    )
     parser.add_argument("--all", action="store_true", help="Run full dessert pipeline")
     parser.add_argument("--sanity", action="store_true", help="Run baseline + dt-halving checks")
     parser.add_argument("--calibrate", action="store_true", help="Calibrate amplitudes to ~50 mg/dL peaks")
     parser.add_argument("--latex", action="store_true", help="Also emit LaTeX summary table")
     parser.add_argument("--no-nutrition", action="store_true", help="Disable nutrition-aware mapping")
+    parser.add_argument("--no-plots", action="store_true", help="Skip plotting outputs")
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Only generate summary.csv (implies --no-plots)",
+    )
     parser.add_argument("--window", type=int, help="Override plot window (minutes)")
     parser.add_argument("--dpi", type=int, default=150, help="Override plot DPI (default 150)")
     parser.add_argument(
@@ -1053,9 +1282,46 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
 
+    if args.summary_only:
+        args.no_plots = True
+
+    if args.clean:
+        clean_outputs()
+        return
+
+    if args.build:
+        try:
+            lib_path = ensure_backend()
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+        save_env()
+        if lib_path is not None and Path(lib_path).exists():
+            print(f"Backend ready: {lib_path}")
+        else:
+            print("Backend ready: python (no compiled library found)")
+        return
+
     if args.import_off is not None:
         name, barcode, portion = args.import_off
         import_off_entry(name, barcode, portion)
+
+    pipeline_requested = args.reproduce or args.all or (
+        args.import_off is None and not args.sanity
+    )
+    sanity_requested = args.sanity
+
+    if not pipeline_requested and not sanity_requested:
+        return
+
+    if args.reproduce:
+        clean_outputs()
+
+    try:
+        ensure_backend()
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    save_env()
 
     params = load_config(CONFIG_PATH)
     dt = params.pop("dt")
@@ -1081,8 +1347,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     simulator = Simulator()
 
-    run_all = args.all or (args.import_off is None and not args.sanity)
-    if run_all:
+    emit_plots = not args.no_plots and not args.summary_only
+    calibrate = args.calibrate if not args.reproduce else False
+    if args.reproduce and args.calibrate:
+        print("Reproduction mode enforces dose-driven simulations; ignoring --calibrate.")
+
+    if pipeline_requested:
         run_pipeline(
             simulator,
             params,
@@ -1093,9 +1363,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             plot_full_dir,
             dpi,
             desserts,
-            calibrate=args.calibrate,
+            calibrate=calibrate,
             latex=args.latex,
             nutrition_enabled=use_nutrition,
+            emit_plots=emit_plots,
+            summary_only=args.summary_only,
         )
     if args.sanity:
         run_sanity(simulator, params, dt, t_end)

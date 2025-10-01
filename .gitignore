@@ -17,6 +17,7 @@ C/*.dylib
 # generated results
 figures/
 tables/
+build/
 *.png
 *.csv
 # windows device file that breaks git

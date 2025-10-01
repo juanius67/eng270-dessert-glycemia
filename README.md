@@ -160,6 +160,16 @@ pytest
 
 ---
 
+## How to reproduce (grader)
+
+* `python run.py --reproduce` — clean → build → run everything (dose-driven)
+* `python run.py --all --calibrate` — appendix equal-peaks mode
+* `python run.py --build` / `python run.py --clean` / `python run.py --no-plots`
+* Outputs: `figures/zoom`, `figures/full`, `tables/summary.csv`, `build/env.json`, `build/build.json`
+* Note: OFF imports store a frozen snapshot in `configs/desserts.yaml` so runs are offline-reproducible.
+
+---
+
 ## Commands
 
 * Run tests: `python -m pytest -q`
