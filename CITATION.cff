@@ -1,9 +1,9 @@
 cff-version: 1.2.0
 title: "ENG-270 Dessert Glycemia Simulator"
 authors:
-  - family-names: Doe
-    given-names: Jane
-    affiliation: University of Dessert Science
+  - family-name: de Oliveira
+    given-name: Juan Lucas
+    affiliation: EPFL
 keywords:
   - glucose
   - insulin
