@@ -1,131 +1,144 @@
 #include "model.h"
+
 #include <math.h>
-#include <stddef.h>
 
-#ifdef _WIN32
-#define API __declspec(dllexport)
-#else
-#define API
-#endif
+static double S_G_ = 0.025;
+static double p2_  = 0.025;
+static double p3_  = 1.3e-3;
+static double n_   = 0.14;
+static double Gb_  = 90.0;
+static double Ib_  = 7.0;
 
-// y = [G, X, I]
-void derivatives(double t, const double y[], double dydt[], const Params *p) {
-    (void)t; // not used except in D(t)
-    const double G = y[0], X = y[1], I = y[2];
-    const double Dt = p->A * exp(-p->k * t);     // D(t) = A e^{-kt}
-
-    dydt[0] = -(p->S_G_min1 + X) * G + p->S_G_min1 * p->Gb_mg_dL + Dt;             // dG/dt
-    dydt[1] = -p->p2_min1 * X + p->p3_min1_per_uU_per_mL * (I - p->Ib_uU_mL);      // dX/dt
-    const double secretion = (G > p->G_thr_mg_dL)
-        ? p->phi_G_uU_mL_min1_per_mg_dL * (G - p->G_thr_mg_dL)
-        : 0.0;
-    dydt[2] = -p->n_min1 * (I - p->Ib_uU_mL) + secretion;                          // dI/dt
+EXPORT void set_params(BergmanParams p) {
+    S_G_ = p.S_G;
+    p2_  = p.p2;
+    p3_  = p.p3;
+    n_   = p.n;
+    Gb_  = p.Gb;
+    Ib_  = p.Ib;
 }
 
-static void derivatives_ex(
-    double t, const double y[], double dydt[], const Params *p,
-    double Afast, double kfast,
-    double Aslow, double kslow,
-    double Aprot, double kprot)
-{
-    const double G = y[0];
-    const double X = y[1];
-    const double I = y[2];
-
-    const double fast = Afast * exp(-kfast * t);
-    const double slow = Aslow * exp(-kslow * t);
-    const double D = fast + slow;
-
-    const double secretion = (G > p->G_thr_mg_dL)
-        ? p->phi_G_uU_mL_min1_per_mg_dL * (G - p->G_thr_mg_dL)
-        : 0.0;
-    const double Iprot = Aprot * exp(-kprot * t);
-
-    dydt[0] = -(p->S_G_min1 + X) * G + p->S_G_min1 * p->Gb_mg_dL + D;
-    dydt[1] = -p->p2_min1 * X + p->p3_min1_per_uU_per_mL * (I - p->Ib_uU_mL);
-    dydt[2] = -p->n_min1 * (I - p->Ib_uU_mL) + secretion + Iprot;
+static void compute_derivatives(double G, double X, double I,
+                                double D, double u,
+                                double* dG, double* dX, double* dI) {
+    *dG = -(S_G_ + X) * (G - Gb_) + D;
+    *dX = -p2_ * X + p3_ * (I - Ib_);
+    *dI = -n_  * (I - Ib_) + u;
 }
 
-// Simple fixed-step RK4. Outputs G and I only (X is internal).
-API void simulate(double *G_out, double *I_out,
-                  int nsteps, double dt, const Params *p)
-{
-    double t = 0.0;
-    double y[3] = { p->Gb_mg_dL, 0.0, p->Ib_uU_mL }; // start at basal, X=0
+EXPORT void step(double* G, double* X, double* I,
+                 double Gb, double Ib,
+                 double dt, double D, double u) {
+    (void)Gb;
+    (void)Ib;
 
-    // scratch
-    double k1[3], k2[3], k3[3], k4[3], ytmp[3], dydt[3];
+    double g = *G;
+    double x = *X;
+    double ins = *I;
 
-    for (int i = 0; i < nsteps; ++i) {
-        // store outputs (include t=0 sample at index 0)
-        G_out[i] = y[0];
-        I_out[i] = y[2];
+    double k1_g, k1_x, k1_i;
+    double k2_g, k2_x, k2_i;
+    double k3_g, k3_x, k3_i;
+    double k4_g, k4_x, k4_i;
 
-        // RK4
-        derivatives(t, y, dydt, p);
-        for (int j=0;j<3;++j) k1[j] = dt * dydt[j];
+    double dG, dX, dI;
 
-        for (int j=0;j<3;++j) ytmp[j] = y[j] + 0.5*k1[j];
-        derivatives(t + 0.5*dt, ytmp, dydt, p);
-        for (int j=0;j<3;++j) k2[j] = dt * dydt[j];
+    compute_derivatives(g, x, ins, D, u, &dG, &dX, &dI);
+    k1_g = dt * dG;
+    k1_x = dt * dX;
+    k1_i = dt * dI;
 
-        for (int j=0;j<3;++j) ytmp[j] = y[j] + 0.5*k2[j];
-        derivatives(t + 0.5*dt, ytmp, dydt, p);
-        for (int j=0;j<3;++j) k3[j] = dt * dydt[j];
+    compute_derivatives(g + 0.5 * k1_g, x + 0.5 * k1_x, ins + 0.5 * k1_i, D, u, &dG, &dX, &dI);
+    k2_g = dt * dG;
+    k2_x = dt * dX;
+    k2_i = dt * dI;
 
-        for (int j=0;j<3;++j) ytmp[j] = y[j] + k3[j];
-        derivatives(t + dt, ytmp, dydt, p);
-        for (int j=0;j<3;++j) k4[j] = dt * dydt[j];
+    compute_derivatives(g + 0.5 * k2_g, x + 0.5 * k2_x, ins + 0.5 * k2_i, D, u, &dG, &dX, &dI);
+    k3_g = dt * dG;
+    k3_x = dt * dX;
+    k3_i = dt * dI;
 
-        for (int j=0;j<3;++j)
-            y[j] += (k1[j] + 2.0*k2[j] + 2.0*k3[j] + k4[j]) / 6.0;
+    compute_derivatives(g + k3_g, x + k3_x, ins + k3_i, D, u, &dG, &dX, &dI);
+    k4_g = dt * dG;
+    k4_x = dt * dX;
+    k4_i = dt * dI;
 
-        t += dt;
+    g   += (k1_g + 2.0 * k2_g + 2.0 * k3_g + k4_g) / 6.0;
+    x   += (k1_x + 2.0 * k2_x + 2.0 * k3_x + k4_x) / 6.0;
+    ins += (k1_i + 2.0 * k2_i + 2.0 * k3_i + k4_i) / 6.0;
+
+    *G = g;
+    *X = x;
+    *I = ins;
+}
+
+static double appearance(double A, double k, double t) {
+    if (A == 0.0) {
+        return 0.0;
     }
+    if (k <= 0.0) {
+        return A;
+    }
+    return A * exp(-k * t);
 }
 
-API void simulate_ex(
-    double* G_out, double* I_out, int nsteps, double dt,
-    const Params* prm,
-    double Afast, double kfast,
-    double Aslow, double kslow,
-    double Aprot, double kprot)
-{
+EXPORT void simulate_dual(double* G_out, double* I_out,
+                          int nsteps, double dt,
+                          double Afast, double kfast,
+                          double Aslow, double kslow,
+                          double Aprot, double kprot) {
+    double G = Gb_;
+    double X = 0.0;
+    double I = Ib_;
     double t = 0.0;
-    double y[3] = { prm->Gb_mg_dL, 0.0, prm->Ib_uU_mL };
-
-    double k1[3], k2[3], k3[3], k4[3], ytmp[3], dydt[3];
 
     for (int i = 0; i < nsteps; ++i) {
-        G_out[i] = y[0];
-        I_out[i] = y[2];
-
-        derivatives_ex(t, y, dydt, prm, Afast, kfast, Aslow, kslow, Aprot, kprot);
-        for (int j = 0; j < 3; ++j) {
-            k1[j] = dt * dydt[j];
-            ytmp[j] = y[j] + 0.5 * k1[j];
+        G_out[i] = G;
+        I_out[i] = I;
+        if (i == nsteps - 1) {
+            break;
         }
 
-        derivatives_ex(t + 0.5 * dt, ytmp, dydt, prm, Afast, kfast, Aslow, kslow, Aprot, kprot);
-        for (int j = 0; j < 3; ++j) {
-            k2[j] = dt * dydt[j];
-            ytmp[j] = y[j] + 0.5 * k2[j];
-        }
+        double D1 = appearance(Afast, kfast, t) + appearance(Aslow, kslow, t);
+        double u1 = appearance(Aprot, kprot, t);
 
-        derivatives_ex(t + 0.5 * dt, ytmp, dydt, prm, Afast, kfast, Aslow, kslow, Aprot, kprot);
-        for (int j = 0; j < 3; ++j) {
-            k3[j] = dt * dydt[j];
-            ytmp[j] = y[j] + k3[j];
-        }
+        double g = G;
+        double x = X;
+        double ins = I;
+        double dG, dX, dI;
 
-        derivatives_ex(t + dt, ytmp, dydt, prm, Afast, kfast, Aslow, kslow, Aprot, kprot);
-        for (int j = 0; j < 3; ++j) {
-            k4[j] = dt * dydt[j];
-        }
+        compute_derivatives(g, x, ins, D1, u1, &dG, &dX, &dI);
+        double k1_g = dt * dG;
+        double k1_x = dt * dX;
+        double k1_i = dt * dI;
 
-        for (int j = 0; j < 3; ++j) {
-            y[j] += (k1[j] + 2.0 * k2[j] + 2.0 * k3[j] + k4[j]) / 6.0;
-        }
+        double t_half = t + 0.5 * dt;
+        double D2 = appearance(Afast, kfast, t_half) + appearance(Aslow, kslow, t_half);
+        double u2 = appearance(Aprot, kprot, t_half);
+        compute_derivatives(g + 0.5 * k1_g, x + 0.5 * k1_x, ins + 0.5 * k1_i,
+                            D2, u2, &dG, &dX, &dI);
+        double k2_g = dt * dG;
+        double k2_x = dt * dX;
+        double k2_i = dt * dI;
+
+        compute_derivatives(g + 0.5 * k2_g, x + 0.5 * k2_x, ins + 0.5 * k2_i,
+                            D2, u2, &dG, &dX, &dI);
+        double k3_g = dt * dG;
+        double k3_x = dt * dX;
+        double k3_i = dt * dI;
+
+        double t_full = t + dt;
+        double D4 = appearance(Afast, kfast, t_full) + appearance(Aslow, kslow, t_full);
+        double u4 = appearance(Aprot, kprot, t_full);
+        compute_derivatives(g + k3_g, x + k3_x, ins + k3_i,
+                            D4, u4, &dG, &dX, &dI);
+        double k4_g = dt * dG;
+        double k4_x = dt * dX;
+        double k4_i = dt * dI;
+
+        G += (k1_g + 2.0 * k2_g + 2.0 * k3_g + k4_g) / 6.0;
+        X += (k1_x + 2.0 * k2_x + 2.0 * k3_x + k4_x) / 6.0;
+        I += (k1_i + 2.0 * k2_i + 2.0 * k3_i + k4_i) / 6.0;
 
         t += dt;
     }

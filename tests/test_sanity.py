@@ -21,7 +21,9 @@ from run import (
     compute_metrics,
     load_config,
     load_dessert_catalog,
+    push_params_to_c,
 )
+from src.bindings import set_params_from_dict
 
 
 @pytest.fixture(scope="module")
@@ -48,6 +50,8 @@ def test_steady_state(simulator: Simulator, params: Dict[str, float]) -> None:
     dt = params["dt"]
     t_end = params["t_end"]
     profile = DoseProfile(0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
+    push_params_to_c(params)
+    set_params_from_dict(params)
     result = simulator.run(params, dt, t_end, profile)
 
     gb = params["Gb_mg_dL"]
@@ -67,6 +71,8 @@ def test_dt_halving(params: Dict[str, float], dessert_profiles: Dict[str, Dict[s
     dt = params["dt"]
     t_end = params["t_end"]
 
+    push_params_to_c(params)
+    set_params_from_dict(params)
     base = simulator.run(params, dt, t_end, profile)
     refined = simulator.run(params, dt / 2.0, t_end, profile)
 
@@ -93,10 +99,9 @@ def test_c_vs_python(params: Dict[str, float], dessert_profiles: Dict[str, Dict[
     dt = params["dt"]
     t_end = params["t_end"]
 
-    if simulator._has_extended:  # type: ignore[attr-defined]
-        result_c = simulator._run_c_extended(params, dt, t_end, profile)  # type: ignore[attr-defined]
-    else:
-        result_c = simulator._run_c_legacy(params, dt, t_end, profile)  # type: ignore[attr-defined]
+    push_params_to_c(params)
+    set_params_from_dict(params)
+    result_c = simulator._run_c(dt, t_end, profile)  # type: ignore[attr-defined]
     result_py = simulator._run_python(params, dt, t_end, profile)  # type: ignore[attr-defined]
 
     diffs = [abs(g_c - g_py) for g_c, g_py in zip(result_c.glucose, result_py.glucose)]
