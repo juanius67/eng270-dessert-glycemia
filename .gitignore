@@ -1,5 +1,6 @@
 # Python environments and caches
 .venv/
+**pycache**/
 __pycache__/
 .mypy_cache/
 .pytest_cache/
@@ -11,8 +12,8 @@ __pycache__/
 Thumbs.db
 
 # Native build products
-*.dll
 *.so
+*.dll
 *.dylib
 *.lib
 *.exp
