@@ -1,9 +1,16 @@
 #ifndef MODEL_H
 #define MODEL_H
 typedef struct {
-    double p1, p2, p3, p4, p5, p6;
-    double Gb, Ib;
-    double A, k; // dessert input params
+    double S_G_min1;
+    double p2_min1;
+    double p3_min1_per_uU_per_mL;
+    double phi_G_uU_mL_min1_per_mg_dL;
+    double G_thr_mg_dL;
+    double n_min1;
+    double Gb_mg_dL;
+    double Ib_uU_mL;
+    double A;
+    double k;
 } Params;
 void derivatives(double t, const double y[], double dydt[], const Params *params);
 #ifdef _WIN32

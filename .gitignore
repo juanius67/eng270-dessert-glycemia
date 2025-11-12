@@ -1,25 +1,30 @@
-# env & caches
+# Python environments and caches
 .venv/
 __pycache__/
 .mypy_cache/
+.pytest_cache/
 .ipynb_checkpoints/
 *.pyc
+
 # OS junk
 .DS_Store
 Thumbs.db
-# build outputs
-C/*.dll
-C/*.lib
-C/*.exp
-C/*.obj
-C/*.so
-C/*.dylib
-# generated results
+
+# Native build products
+*.dll
+*.so
+*.dylib
+*.lib
+*.exp
+*.obj
+*.o
+
+# Generated artifacts
+build/
 figures/
 tables/
-build/
 *.png
 *.csv
-# windows device file that breaks git
+
+# Misc
 nul
-.venv/
