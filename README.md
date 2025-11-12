@@ -28,10 +28,11 @@ Generated artifacts land in `build/`, `figures/`, and `tables/` (all ignored by 
 python -m venv .venv
 source .venv/bin/activate  # or .\.venv\Scripts\activate on Windows
 pip install -r requirements.txt
-python run.py              # uses Python backend if C build unavailable
+python run.py --reproduce   # build C backend if needed, run frozen YAMLs, emit figures/tables/build metadata
+python -m pytest -q         # steady-state and dt-halving checks
 ```
 
-The first run automatically attempts to compile the C solver; if no compiler is found the Python integrator is used instead. Results appear in:
+The `--reproduce` flow wipes prior outputs, rebuilds the C solver if necessary, and replays every frozen YAML in `configs/frozen/`. Results appear in:
 
 * `figures/zoom/` and `figures/full/` – glucose, insulin, and D(t) plots;
 * `tables/summary.csv` – dessert-level metrics (peaks, AUCs, kinetics);
@@ -55,7 +56,7 @@ This command wipes prior outputs, rebuilds the C backend, and re-runs every froz
 
 ## Configuration
 
-* `configs/params.yaml` stores the minimal-model parameters with units (`S_G_min1`, `p2_min1`, `p3_min1_per_uU_per_mL`, `phi_G_uU_mL_min1_per_mg_dL`, `G_thr_mg_dL`, `n_min1`, `Gb_mg_dL`, `Ib_uU_mL`) plus integration settings and nutrition modifiers. Inline comments document units.
+* `configs/params.yaml` stores physiology, kinetics, nutrition, and integration constants with unit-encoded keys (`Gb_mg_dL`, `Ib_uU_mL`, `S_G_min1`, `p2_min1`, `p3_min1_per_uU_mL`, `n_min1`, `Vd_dL`, `f_hep`, `f_app0`, `beta_fiber_per10g`, `beta_fat_per10g`, `k_fast0_min1`, `k_slow0_min1`, `alpha_prot_uU_mL_per_g`, `k_prot_min1`, `dt_min`, `t_end_min`). Inline comments document units.
 * `configs/desserts.yaml` maps dessert names to macronutrients per portion (`carbs_g`, `sugars_g`, `fiber_g`, `fat_g`, `protein_g`, `portion_g`, optional `barcode`).
 * `configs/frozen/*.yaml` are immutable per-dessert snapshots (one file per dessert) used exclusively by `--reproduce` for grader-proof reruns.
 

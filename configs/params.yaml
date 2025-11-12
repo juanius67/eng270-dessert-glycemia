@@ -1,26 +1,24 @@
-# Bergman minimal model parameters (literature defaults)
-S_G_min1: 0.03                      # [min^-1] glucose effectiveness
-p2_min1: 0.012                      # [min^-1] remote insulin decay
-p3_min1_per_uU_per_mL: 4.92e-6      # [min^-2·(µU/mL)^-1] insulin sensitivity
-phi_G_uU_mL_min1_per_mg_dL: 0.0039  # [µU·mL^-1·min^-1·(mg/dL)^-1] secretion slope
-G_thr_mg_dL: 80.0                   # [mg/dL] insulin secretion threshold
-n_min1: 0.265                       # [min^-1] insulin clearance
-Gb_mg_dL: 80.0                      # [mg/dL] basal glucose
-Ib_uU_mL: 7.0                       # [µU/mL] basal insulin
+# Physiological set-points (units in keys)
+Gb_mg_dL: 90
+Ib_uU_mL: 7
 
-dt: 0.5                             # [min] integration step
-t_end: 1440.0                       # [min] simulation horizon
-plot_window_min: 240                # [min] zoomed plot window
-plot_zoom_dir: "figures/zoom"
-plot_full_dir: "figures/full"
+# Minimal-model kinetics
+S_G_min1: 0.025
+p2_min1: 0.025
+p3_min1_per_uU_mL: 1.3e-3
+n_min1: 0.14
 
-# Nutrition→kinetics mapping (tunable)
-Vd_dL: 120.0                        # [dL] glucose distribution volume
-hepatic_first_pass: 0.25            # [fraction] hepatic extraction
-f_app_base: 0.22                    # [fraction] baseline appearance
-beta_fiber: 0.06                    # [fraction/10 g] fiber penalty
-beta_fat: 0.05                      # [fraction/10 g] fat penalty
-kfast_base: 0.45                    # [min^-1] fast sugar rate
-kslow_base: 0.07                    # [min^-1] slow starch rate
-alpha_prot: 0.10                    # [µU·mL^-1·g^-1] protein-driven insulin gain
-kprot: 0.05                         # [min^-1] protein decay
+# Oral/appearance mapping
+Vd_dL: 110
+f_hep: 0.25
+f_app0: 0.30
+beta_fiber_per10g: 0.05
+beta_fat_per10g: 0.06
+k_fast0_min1: 0.35
+k_slow0_min1: 0.07
+alpha_prot_uU_mL_per_g: 0.06
+k_prot_min1: 0.05
+
+# Integration controls
+dt_min: 0.5
+t_end_min: 1440

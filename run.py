@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import ctypes
+import importlib
 import hashlib
 import json
 import math
@@ -18,6 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
+
+import warnings
 
 import yaml
 
@@ -39,6 +42,8 @@ LIB_MAC = ROOT / "C" / "libmodel.dylib"
 BUILD_META = BUILD_DIR / "build.json"
 ENV_JSON = BUILD_DIR / "env.json"
 SANITY_JSON = BUILD_DIR / "sanity.json"
+
+_BINDINGS = None
 
 
 def sha256(path: os.PathLike[str] | str) -> str:
@@ -78,6 +83,27 @@ def compute_source_hash() -> str:
     model_c = C_DIR / "model.c"
     model_h = C_DIR / "model.h"
     return sha256(model_c) + sha256(model_h)
+
+
+def load_bindings() -> Any | None:
+    global _BINDINGS
+    try:
+        import src.bindings as bindings  # type: ignore[attr-defined]
+    except ModuleNotFoundError:
+        _BINDINGS = None
+        return None
+    _BINDINGS = importlib.reload(bindings)
+    return _BINDINGS
+
+
+def push_params_to_c(params: Dict[str, float]) -> None:
+    bindings = _BINDINGS or load_bindings()
+    if bindings is None:
+        return
+    lib = getattr(bindings, "lib", None)
+    if lib is None:
+        return
+    bindings.set_params_from_dict(params)
 
 
 def get_backend_spec() -> Tuple[Path, List[List[str]]]:
@@ -245,23 +271,41 @@ def clean_outputs() -> None:
             shutil.rmtree(path)
             print(f"Removed {path}")
 
-DEFAULT_DT = 0.5
-DEFAULT_T_END = 1440.0
 DEFAULT_PLOT_WINDOW = 240.0
 
 NUTRITION_DEFAULTS: Dict[str, float] = {
-    "Vd_dL": 120.0,
-    "hepatic_first_pass": 0.25,
-    "f_app_base": 0.22,
-    "beta_fiber": 0.06,
-    "beta_fat": 0.05,
-    "kfast_base": 0.45,
-    "kslow_base": 0.07,
-    "alpha_prot": 0.10,
-    "kprot": 0.05,
+    "Vd_dL": 110.0,
+    "f_hep": 0.25,
+    "f_app0": 0.30,
+    "beta_fiber_per10g": 0.05,
+    "beta_fat_per10g": 0.06,
+    "k_fast0_min1": 0.35,
+    "k_slow0_min1": 0.07,
+    "alpha_prot_uU_mL_per_g": 0.06,
+    "k_prot_min1": 0.05,
 }
 
 nutrition_settings: Dict[str, float] = NUTRITION_DEFAULTS.copy()
+
+NEW_KEYS = {
+    "Gb_mg_dL",
+    "Ib_uU_mL",
+    "S_G_min1",
+    "p2_min1",
+    "p3_min1_per_uU_mL",
+    "n_min1",
+    "Vd_dL",
+    "f_hep",
+    "f_app0",
+    "beta_fiber_per10g",
+    "beta_fat_per10g",
+    "k_fast0_min1",
+    "k_slow0_min1",
+    "alpha_prot_uU_mL_per_g",
+    "k_prot_min1",
+    "dt_min",
+    "t_end_min",
+}
 
 TARGET_PEAK = 50.0
 TARGET_TOL = 5.0
@@ -332,131 +376,42 @@ class DessertRun:
 
 class Simulator:
     def __init__(self) -> None:
-        _, lib = load_backend()
+        label, lib = load_backend()
+        self._label = label
         self._lib = lib
-        self._params_struct = None
-        self._has_extended = False
-
-        if self._lib is not None:
-            class Params(ctypes.Structure):
-                _fields_ = [
-                    ("S_G_min1", ctypes.c_double),
-                    ("p2_min1", ctypes.c_double),
-                    ("p3_min1_per_uU_per_mL", ctypes.c_double),
-                    ("phi_G_uU_mL_min1_per_mg_dL", ctypes.c_double),
-                    ("G_thr_mg_dL", ctypes.c_double),
-                    ("n_min1", ctypes.c_double),
-                    ("Gb_mg_dL", ctypes.c_double),
-                    ("Ib_uU_mL", ctypes.c_double),
-                    ("A", ctypes.c_double),
-                    ("k", ctypes.c_double),
-                ]
-
-            self._params_struct = Params
-            self._lib.simulate.argtypes = [
-                ctypes.POINTER(ctypes.c_double),
-                ctypes.POINTER(ctypes.c_double),
-                ctypes.c_int,
-                ctypes.c_double,
-                ctypes.POINTER(Params),
-            ]
-            self._lib.simulate.restype = None
-            if hasattr(self._lib, "simulate_ex"):
-                self._lib.simulate_ex.argtypes = [
-                    ctypes.POINTER(ctypes.c_double),
-                    ctypes.POINTER(ctypes.c_double),
-                    ctypes.c_int,
-                    ctypes.c_double,
-                    ctypes.POINTER(Params),
-                    ctypes.c_double,
-                    ctypes.c_double,
-                    ctypes.c_double,
-                    ctypes.c_double,
-                    ctypes.c_double,
-                    ctypes.c_double,
-                ]
-                self._lib.simulate_ex.restype = None
-                self._has_extended = True
 
     @property
     def label(self) -> str:
-        if self._lib is None:
-            return "python"
-        return "c-ex" if self._has_extended else "c"
+        return self._label
 
     def run(self, params: Dict[str, float], dt: float, t_end: float, profile: DoseProfile) -> SimulationResult:
-        if self._lib is not None and self._params_struct is not None:
-            if self._has_extended:
-                return self._run_c_extended(params, dt, t_end, profile)
-            return self._run_c_legacy(params, dt, t_end, profile)
+        if self._lib is not None:
+            push_params_to_c(params)
+            return self._run_c(dt, t_end, profile)
         return self._run_python(params, dt, t_end, profile)
 
-    # --- backends ---------------------------------------------------------
-    def _run_c_extended(self, params: Dict[str, float], dt: float, t_end: float, profile: DoseProfile) -> SimulationResult:
-        assert self._lib is not None and self._params_struct is not None
+    def _run_c(self, dt: float, t_end: float, profile: DoseProfile) -> SimulationResult:
+        assert self._lib is not None
         steps = int(round(t_end / dt))
         nsteps = steps + 1
         times = [i * dt for i in range(nsteps)]
 
         g_arr = (ctypes.c_double * nsteps)()
         i_arr = (ctypes.c_double * nsteps)()
-        params_struct = self._params_struct(
-            params["S_G_min1"],
-            params["p2_min1"],
-            params["p3_min1_per_uU_per_mL"],
-            params["phi_G_uU_mL_min1_per_mg_dL"],
-            params["G_thr_mg_dL"],
-            params["n_min1"],
-            params["Gb_mg_dL"],
-            params["Ib_uU_mL"],
-            0.0,
-            0.0,
-        )
-        self._lib.simulate_ex(
+
+        self._lib.simulate_dual(
             g_arr,
             i_arr,
             nsteps,
-            ctypes.c_double(dt),
-            ctypes.byref(params_struct),
-            ctypes.c_double(profile.Afast),
-            ctypes.c_double(profile.kfast),
-            ctypes.c_double(profile.Aslow),
-            ctypes.c_double(profile.kslow),
-            ctypes.c_double(profile.Aprot),
-            ctypes.c_double(profile.kprot),
+            dt,
+            profile.Afast,
+            profile.kfast,
+            profile.Aslow,
+            profile.kslow,
+            profile.Aprot,
+            profile.kprot,
         )
-        glucose = [g_arr[i] for i in range(nsteps)]
-        insulin = [i_arr[i] for i in range(nsteps)]
-        return SimulationResult(times, glucose, insulin, profile)
 
-    def _run_c_legacy(self, params: Dict[str, float], dt: float, t_end: float, profile: DoseProfile) -> SimulationResult:
-        assert self._lib is not None and self._params_struct is not None
-        steps = int(round(t_end / dt))
-        nsteps = steps + 1
-        times = [i * dt for i in range(nsteps)]
-
-        g_arr = (ctypes.c_double * nsteps)()
-        i_arr = (ctypes.c_double * nsteps)()
-        keff = profile.harmonic_rate()
-        params_struct = self._params_struct(
-            params["S_G_min1"],
-            params["p2_min1"],
-            params["p3_min1_per_uU_per_mL"],
-            params["phi_G_uU_mL_min1_per_mg_dL"],
-            params["G_thr_mg_dL"],
-            params["n_min1"],
-            params["Gb_mg_dL"],
-            params["Ib_uU_mL"],
-            profile.total_amplitude(),
-            keff,
-        )
-        self._lib.simulate(
-            g_arr,
-            i_arr,
-            nsteps,
-            ctypes.c_double(dt),
-            ctypes.byref(params_struct),
-        )
         glucose = [g_arr[i] for i in range(nsteps)]
         insulin = [i_arr[i] for i in range(nsteps)]
         return SimulationResult(times, glucose, insulin, profile)
@@ -476,11 +431,10 @@ class Simulator:
             fast = profile.Afast * math.exp(-profile.kfast * t)
             slow = profile.Aslow * math.exp(-profile.kslow * t)
             D = fast + slow
-            secretion = params["phi_G_uU_mL_min1_per_mg_dL"] * max(0.0, g - params["G_thr_mg_dL"])
             iprot = profile.Aprot * math.exp(-profile.kprot * t)
-            dG = -(params["S_G_min1"] + x) * g + params["S_G_min1"] * params["Gb_mg_dL"] + D
-            dX = -params["p2_min1"] * x + params["p3_min1_per_uU_per_mL"] * (ins - params["Ib_uU_mL"])
-            dI = -params["n_min1"] * (ins - params["Ib_uU_mL"]) + secretion + iprot
+            dG = -(params["S_G_min1"] + x) * (g - params["Gb_mg_dL"]) + D
+            dX = -params["p2_min1"] * x + params["p3_min1_per_uU_mL"] * (ins - params["Ib_uU_mL"])
+            dI = -params["n_min1"] * (ins - params["Ib_uU_mL"]) + iprot
             return dG, dX, dI
 
         for idx, current_time in enumerate(times):
@@ -513,48 +467,60 @@ class Simulator:
 
 
 def load_backend() -> Tuple[str, ctypes.CDLL | None]:
-    lib_path, _ = get_backend_spec()
-    lib = try_load_library(lib_path)
+    ensure_backend()
+    bindings = load_bindings()
+    lib = getattr(bindings, "lib", None) if bindings is not None else None
     if lib is None:
         print("Using pure-Python RK4 backend.")
         return "python", None
-    print(f"Using C backend: {lib_path}")
+    print(f"Using C backend: {Path(lib._name).resolve()}")  # type: ignore[attr-defined]
     return "c", lib
+def load_params_yaml(path: Path) -> Dict[str, float]:
+    with path.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"Parameters file {path} must be a mapping")
 
+    data = dict(raw)
+    legacy = all(key in data for key in ("p1", "p2", "p3", "p4"))
+    has_named = {"S_G_min1", "p2_min1", "p3_min1_per_uU_mL", "n_min1"}.issubset(data)
+    if legacy and not has_named:
+        warnings.warn(
+            "Detected legacy p1..p4 keys; mapping to explicit unit-encoded names.",
+            RuntimeWarning,
+        )
+        data.setdefault("S_G_min1", float(data["p1"]))
+        data.setdefault("p2_min1", float(data["p2"]))
+        data.setdefault("p3_min1_per_uU_mL", float(data["p3"]))
+        data.setdefault("n_min1", float(data["p4"]))
+        data.setdefault("Gb_mg_dL", float(data.get("Gb", 90.0)))
+        data.setdefault("Ib_uU_mL", float(data.get("Ib", 7.0)))
+        data.setdefault("dt_min", float(data.get("dt", 0.5)))
+        data.setdefault("t_end_min", float(data.get("t_end", 1440.0)))
+        for key, default in NUTRITION_DEFAULTS.items():
+            data.setdefault(key, default)
 
-def try_load_library(path: Path) -> ctypes.CDLL | None:
-    if not path.exists():
-        return None
-    try:
-        return ctypes.CDLL(str(path.resolve()))
-    except OSError as exc:
-        print(f"  load failed for {path}: {exc}")
-        return None
+    missing = [key for key in NEW_KEYS if key not in data]
+    if missing:
+        raise ValueError(f"Missing keys in {path}: {sorted(missing)}")
+
+    params: Dict[str, float] = {}
+    for key in NEW_KEYS:
+        params[key] = float(data[key])
+
+    if "plot_window_min" in data:
+        params["plot_window_min"] = float(data["plot_window_min"])
+    return params
 
 
 def load_config(path: Path) -> Dict[str, float]:
     global nutrition_settings
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle) or {}
-    required = {
-        "S_G_min1",
-        "p2_min1",
-        "p3_min1_per_uU_per_mL",
-        "phi_G_uU_mL_min1_per_mg_dL",
-        "G_thr_mg_dL",
-        "n_min1",
-        "Gb_mg_dL",
-        "Ib_uU_mL",
-    }
-    missing = required.difference(data)
-    if missing:
-        raise KeyError(f"Missing config keys: {sorted(missing)}")
-    params = {key: float(data[key]) for key in required}
-    params["dt"] = float(data.get("dt", DEFAULT_DT))
-    params["t_end"] = float(data.get("t_end", DEFAULT_T_END))
-    params["plot_window_min"] = float(data.get("plot_window_min", DEFAULT_PLOT_WINDOW))
-    for key, default in NUTRITION_DEFAULTS.items():
-        nutrition_settings[key] = float(data.get(key, default))
+    params = load_params_yaml(path)
+    for key in NUTRITION_DEFAULTS:
+        nutrition_settings[key] = params[key]
+    params.setdefault("plot_window_min", DEFAULT_PLOT_WINDOW)
+    params["dt"] = params["dt_min"]
+    params["t_end"] = params["t_end_min"]
     return params
 
 
@@ -579,27 +545,34 @@ def nutrition_to_profile(
     avail_carbs_g = max(0.0, carbs_g - 0.5 * fiber_g)
     f_fast = 0.0 if carbs_g <= 0.0 else clip(sugars_g / carbs_g, 0.0, 1.0)
     f_app = clip(
-        settings["f_app_base"] * (1.0 - settings["beta_fiber"] * (fiber_g / 10.0)),
+        settings["f_app0"] * (1.0 - settings["beta_fiber_per10g"] * (fiber_g / 10.0)),
         0.05,
         0.60,
     )
     k_mod = 1.0 / (
         1.0
-        + settings["beta_fat"] * (fat_g / 10.0)
-        + settings["beta_fiber"] * (fiber_g / 10.0)
+        + settings["beta_fat_per10g"] * (fat_g / 10.0)
+        + settings["beta_fiber_per10g"] * (fiber_g / 10.0)
     )
-    kfast = settings["kfast_base"] * k_mod
-    kslow = settings["kslow_base"] * k_mod
+    kfast = settings["k_fast0_min1"] * k_mod
+    kslow = settings["k_slow0_min1"] * k_mod
     dose_total_mgdL = (
         (avail_carbs_g * f_app * 1000.0) / settings["Vd_dL"]
-    ) * (1.0 - settings["hepatic_first_pass"])
+    ) * (1.0 - settings["f_hep"])
     dose_fast = dose_total_mgdL * f_fast
     dose_slow = dose_total_mgdL * (1.0 - f_fast)
     Afast = kfast * dose_fast
     Aslow = kslow * dose_slow
-    Aprot = settings["alpha_prot"] * protein_g
+    Aprot = settings["alpha_prot_uU_mL_per_g"] * protein_g
 
-    profile = DoseProfile(Afast, kfast, Aslow, kslow, Aprot, settings["kprot"])
+    profile = DoseProfile(
+        Afast,
+        kfast,
+        Aslow,
+        kslow,
+        Aprot,
+        settings["k_prot_min1"],
+    )
     extras = {
         "dose_mgdL": profile.total_dose(),
         "f_fast": f_fast,
