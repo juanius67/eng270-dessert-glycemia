@@ -1,105 +1,104 @@
 # ENG-270 — Dessert Glycemia Simulator
 
-Simulates post-prandial glucose/insulin responses for South American desserts using a dual-pool appearance model driven by macronutrient YAML files. The Bergman minimal model is solved with either a C shared library or a pure-Python RK4 fallback. Outputs include PNG figures in `figures/` and CSV summaries in `tables/`.
-
----
-
-## Repository layout
-
-```text
-C/                    # C backend (model.c / model.h)
-configs/
-  ├─ params.yaml      # physiological parameters + nutrition→kinetics knobs
-  ├─ desserts.yaml    # editable dessert catalog (macros per portion)
-  └─ frozen/          # frozen YAML inputs used by --reproduce
-run.py                # single CLI entry point
-requirements.txt      # Python dependencies
-LICENSE, CITATION.cff
-tests/                # pytest sanity checks
-```
-
-Generated artifacts land in `build/`, `figures/`, and `tables/` (all ignored by git).
-
----
-
-## Quick start
-
-```bash
-python -m venv .venv
-source .venv/bin/activate  # or .\.venv\Scripts\activate on Windows
-pip install -r requirements.txt
-python run.py --reproduce   # build C backend if needed, run frozen YAMLs, emit figures/tables/build metadata
-python -m pytest -q         # steady-state and dt-halving checks
-```
-
-The `--reproduce` flow wipes prior outputs, rebuilds the C solver if necessary, and replays every frozen YAML in `configs/frozen/`. Results appear in:
-
-* `figures/zoom/` and `figures/full/` – glucose, insulin, and D(t) plots;
-* `tables/summary.csv` – dessert-level metrics (peaks, AUCs, kinetics);
-* `build/env.json`, `build/build.json`, `build/sanity.json` – environment and sanity diagnostics.
-
----
+Nutrition labels in YAML drive a dual-exponential gut appearance model that feeds the Bergman minimal model. A C RK4 core (exposed via `ctypes`) updates glucose, insulin, and remote insulin effect for a nominal, non-diabetic adult. The command-line interface in `run.py` is the only entry point and produces figures, tables, and build metadata.
 
 ## Grader quick start
 
 ```bash
+pip install -r requirements.txt
 python run.py --reproduce
+python run.py --calibrate --sensitivity
+python -m pytest -q
 ```
 
-This command wipes prior outputs, rebuilds the C backend, and re-runs every frozen YAML under `configs/frozen/`. It emits the exact figures and tables expected by the ENG-270 grader:
+`--reproduce` wipes prior artifacts, rebuilds the C core if necessary, and replays every frozen YAML under `configs/frozen/`. Outputs are written to:
 
-* `figures/zoom/`, `figures/full/`
-* `tables/summary.csv`
-* `build/env.json`, `build/build.json`, `build/sanity.json`
+* `figures/zoom/` (default 0–240 min overlays for glucose/insulin/appearance)
+* `figures/full/` (0–1440 min day-long overlays)
+* `tables/summary.csv` (peak ΔG, times, iAUCs, baseline return, insulin peak)
+* `build/env.json` (Python, NumPy, OS)
+* `build/build.json` (compiler command and SHA256 of `src/model.c`)
 
----
+`--calibrate` equalises the fast and slow appearance amplitudes (keeping decay rates fixed). `--sensitivity` performs ±20 % sweeps of fat, fiber, and protein and writes `tables/sensitivity.csv`.
 
-## Configuration
+## Repository layout
 
-* `configs/params.yaml` stores physiology, kinetics, nutrition, and integration constants with unit-encoded keys (`Gb_mg_dL`, `Ib_uU_mL`, `S_G_min1`, `p2_min1`, `p3_min1_per_uU_mL`, `n_min1`, `Vd_dL`, `f_hep`, `f_app0`, `beta_fiber_per10g`, `beta_fat_per10g`, `k_fast0_min1`, `k_slow0_min1`, `alpha_prot_uU_mL_per_g`, `k_prot_min1`, `dt_min`, `t_end_min`). Inline comments document units.
-* `configs/desserts.yaml` maps dessert names to macronutrients per portion (`carbs_g`, `sugars_g`, `fiber_g`, `fat_g`, `protein_g`, `portion_g`, optional `barcode`).
-* `configs/frozen/*.yaml` are immutable per-dessert snapshots (one file per dessert) used exclusively by `--reproduce` for grader-proof reruns.
+```text
+configs/
+  ├─ params.yaml      # unit-encoded physiology + appearance knobs
+  ├─ desserts.yaml    # editable dessert catalog (per-portion macros)
+  └─ frozen/          # immutable YAMLs consumed by --reproduce
+run.py                # single CLI
+src/model.c,h         # RK4 implementation of the Bergman minimal model
+src/bindings.py       # ctypes loader with auto-build logic
+requirements.txt      # numpy, matplotlib, pyyaml, pytest
+LICENSE, CITATION.cff
+tests/test_sanity.py  # steady-state + dt-halving checks
+```
 
-The nutrition pipeline converts each dessert YAML into a dual-exponential appearance profile `(A_fast, k_fast, A_slow, k_slow)` with a protein-driven insulin term `(A_prot, k_prot)`. Fat, fiber, and protein adjust appearance fractions and kinetics per the tunables in `params.yaml`.
+Git ignores `build/`, `figures/`, `tables/`, compiled libraries, and cache directories.
 
----
+## Parameters and inputs
 
-## CLI reference
+`configs/params.yaml` stores the defaults used by the simulator. Keys encode units explicitly and match the specification:
+
+* `Gb_mg_dL: 90`
+* `Ib_uU_mL: 7`
+* `S_G_min1: 0.025`
+* `p2_min1: 0.025`
+* `p3_min1_per_uU_mL: 1.3e-3`
+* `n_min1: 0.14`
+* `Vd_dL: 110`
+* `f_hep: 0.25`
+* `f_app0: 0.30`
+* `beta_fiber_per10g: 0.05`
+* `beta_fat_per10g: 0.06`
+* `k_fast0_min1: 0.35`
+* `k_slow0_min1: 0.07`
+* `alpha_prot_uU_mL_per_g: 0.06`
+* `k_prot_min1: 0.05`
+* `dt_min: 0.5`
+* `t_end_min: 1440`
+
+Legacy `p1`–`p4` keys are mapped to the new names with a warning for backward compatibility.
+
+Each dessert YAML provides per-portion macros only—no hard-coded `(A, k)` pairs remain. A minimal example:
+
+```yaml
+name: sample_donut
+carbs_g: 45.0
+sugars_g: 25.0
+fiber_g: 2.0
+fat_g: 12.0
+protein_g: 4.0
+portion_g: 85.0
+```
+
+During a run, carbohydrates determine the total appearance dose after hepatic extraction (`f_hep`). Sugars route to the fast pool, the remainder to the slow pool. Fat and fiber adjust the appearance fractions and decay rates; protein induces an exponential insulin stimulus.
+
+## CLI usage
 
 ```
-python run.py [--calibrate] [--sensitivity] [--window MIN] [--dpi DPI]
-              [--no-plots] [--summary-only] [--reproduce]
+python run.py [--reproduce] [--calibrate] [--sensitivity]
+              [--window {0-120,0-240,0-1440}] [--dpi DPI]
+              [--no-plots] [--summary-only] [--outdir PATH]
 ```
 
-* `--reproduce` – clean outputs, rebuild C, and run every frozen YAML.
-* `--calibrate` – rescale appearance amplitudes so glucose peaks reach ~50 mg/dL.
-* `--sensitivity` – perform ±20% fat/fiber/protein sweeps and write `tables/sensitivity.csv`.
-* `--window` – override the zoom plot window in minutes (default 240).
-* `--dpi` – plot resolution (default 150).
-* `--no-plots` – skip PNG generation.
-* `--summary-only` – emit CSV tables only (implies `--no-plots`).
+* `--reproduce` – clean outputs and rerun frozen desserts only.
+* `--calibrate` – set equal fast/slow amplitudes while keeping decay rates.
+* `--sensitivity` – write `tables/sensitivity.csv` after ±20 % fat/fiber/protein sweeps.
+* `--window` – adjust the zoom-plot window (default `0-240`).
+* `--dpi` – change figure resolution (default `150`).
+* `--no-plots` – skip figure creation.
+* `--summary-only` – emit tables and build metadata only (implies no plots).
+* `--outdir` – redirect outputs (defaults to the repository root).
 
-All runs load physiology from `configs/params.yaml` and dessert macros from YAML; no hard-coded `(A, k)` paths remain.
-
----
+The CLI always loads constants from `configs/params.yaml`, pushes them into the C layer via `set_params`, and iterates the RK4 integrator (`step(...)`) with the computed appearance and insulin stimuli.
 
 ## Testing
 
 ```bash
-pytest
+python -m pytest -q
 ```
 
-`tests/test_sanity.py` verifies:
-
-* Steady-state stability when `D(t) = 0`.
-* Solver invariance when halving the timestep (`<1%` change in key metrics).
-* Parity between C and Python integrators when the shared library is available.
-
----
-
-## Reproducibility notes
-
-* `build/env.json` captures OS, Python, NumPy, Matplotlib, and git metadata.
-* `build/build.json` records compiler and source hashes when the C backend is rebuilt.
-* `build/sanity.json` stores dt-halving and end-state checks for the latest run.
-* Frozen YAML files in `configs/frozen/` provide the exact nutrition inputs used for grading.
+`tests/test_sanity.py` checks that the fasting state remains within ±0.5 mg/dL (glucose) and ±0.5 μU/mL (insulin) for 120 min, and that halving the timestep changes the peak glucose excursion by less than 1 %.
