@@ -1,15 +1,22 @@
 # ENG-270 — Dessert Glycemia Simulator
 
-Nutrition labels in YAML drive a dual-exponential gut appearance model that feeds the Bergman minimal model. A C RK4 core (exposed via `ctypes`) updates glucose, insulin, and remote insulin effect for a nominal, non-diabetic adult. The command-line interface in `run.py` is the only entry point and produces figures, tables, and build metadata.
-
-## Grader quick start
-
+Quick start (reproducible build)
+--------------------------------
 ```bash
 pip install -r requirements.txt
-python run.py --reproduce
-python run.py --calibrate --sensitivity
-python -m pytest -q
-```
+python run.py --reproduce          # compiles C if needed; runs all configs/frozen/*.yaml; writes figures, tables, build/*
+python run.py --calibrate          # optional equal-peak calibration (rescales amplitudes only)
+python run.py --sensitivity        # ±20% fat/fiber/protein → tables/sensitivity.csv
+python -m pytest -q                # numerical sanity tests
+````
+
+**Inputs.** The pipeline reads *only* frozen per-dessert YAML files in `configs/frozen/` at grading time. Each file stores per-portion: `carbs_g, sugars_g, fiber_g, fat_g, protein_g, portion_g`. These are mapped to a dual-pool appearance
+(D(t) = A_\text{fast} e^{-k_\text{fast} t} + A_\text{slow} e^{-k_\text{slow} t}) with fat/fiber modifiers, and a protein-driven insulin pulse (u(t)).
+
+**Parameters.** Model constants live in `configs/params.yaml` with unit-encoded keys:
+`Gb_mg_dL, Ib_uU_mL, S_G_min1, p2_min1, p3_min1_per_uU_mL, n_min1, Vd_dL, f_hep, f_app0, beta_fiber_per10g, beta_fat_per10g, k_fast0_min1, k_slow0_min1, alpha_prot_uU_mL_per_g, k_prot_min1, dt_min, t_end_min`.
+
+Nutrition labels in YAML drive a dual-exponential gut appearance model that feeds the Bergman minimal model. A C RK4 core (exposed via `ctypes`) updates glucose, insulin, and remote insulin effect for a nominal, non-diabetic adult. The command-line interface in `run.py` is the only entry point and produces figures, tables, and build metadata.
 
 `--reproduce` wipes prior artifacts, rebuilds the C core if necessary, and replays every frozen YAML under `configs/frozen/`. Outputs are written to:
 
@@ -26,7 +33,6 @@ python -m pytest -q
 ```text
 configs/
   ├─ params.yaml      # unit-encoded physiology + appearance knobs
-  ├─ desserts.yaml    # editable dessert catalog (per-portion macros)
   └─ frozen/          # immutable YAMLs consumed by --reproduce
 run.py                # single CLI
 src/model.c,h         # RK4 implementation of the Bergman minimal model
@@ -62,7 +68,7 @@ Git ignores `build/`, `figures/`, `tables/`, compiled libraries, and cache direc
 
 Legacy `p1`–`p4` keys are mapped to the new names with a warning for backward compatibility.
 
-Each dessert YAML provides per-portion macros only—no hard-coded `(A, k)` pairs remain. A minimal example:
+Each dessert YAML provides per-portion macros only—no hard-coded `(A, k)` pairs remain. A minimal example (stored in `configs/frozen/`):
 
 ```yaml
 name: sample_donut

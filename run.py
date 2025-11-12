@@ -138,6 +138,48 @@ def compute_meal_appearance(dessert: Dict[str, float], params: Dict[str, float],
     return MealAppearance(A_fast, k_fast, A_slow, k_slow, A_prot, k_prot, dose_fast, dose_slow, dose_total)
 
 
+def _prepare_params(params: Dict[str, float], *, dt_min: float | None = None, t_end_min: float | None = None) -> Dict[str, float]:
+    updated = dict(params)
+    if dt_min is not None:
+        updated["dt_min"] = float(dt_min)
+    if t_end_min is not None:
+        updated["t_end_min"] = float(t_end_min)
+    return updated
+
+
+def simulate_no_meal(params: Dict[str, float], t_end_min: float, dt_min: float) -> Tuple[np.ndarray, np.ndarray]:
+    local_params = _prepare_params(params, dt_min=dt_min, t_end_min=t_end_min)
+    set_params_from_dict(local_params)
+    kinetics = MealAppearance(
+        A_fast=0.0,
+        k_fast=local_params["k_fast0_min1"],
+        A_slow=0.0,
+        k_slow=local_params["k_slow0_min1"],
+        A_prot=0.0,
+        k_prot=local_params["k_prot_min1"],
+        dose_fast=0.0,
+        dose_slow=0.0,
+        dose_total=0.0,
+    )
+    result = simulate("fasting", local_params, kinetics)
+    return result.glucose, result.insulin
+
+
+def simulate_peak_deltaG(params: Dict[str, float], dessert_yaml_path: Path, dt_min: float) -> float:
+    with Path(dessert_yaml_path).open("r", encoding="utf-8") as handle:
+        dessert = yaml.safe_load(handle) or {}
+    if not isinstance(dessert, dict):
+        raise ValueError(f"Dessert YAML {dessert_yaml_path} must contain a mapping")
+    local_params = _prepare_params(params, dt_min=dt_min)
+    set_params_from_dict(local_params)
+    calibrate = False
+    kinetics = compute_meal_appearance(dessert, local_params, calibrate)
+    name = str(dessert.get("name", Path(dessert_yaml_path).stem))
+    result = simulate(name, local_params, kinetics)
+    delta = result.glucose - local_params["Gb_mg_dL"]
+    return float(delta.max())
+
+
 def _exp_decay(amplitude: float, rate: float, t: float) -> float:
     if amplitude == 0.0:
         return 0.0
