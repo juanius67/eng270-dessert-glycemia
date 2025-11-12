@@ -1,27 +1,17 @@
 #!/usr/bin/env python3
-"""Compact entrypoint for dessert-driven glycemia experiments."""
+"""Single CLI entry-point for nutrition-driven Bergman minimal model runs."""
 from __future__ import annotations
 
 import argparse
 import csv
-import ctypes
-import importlib
-import hashlib
 import json
 import math
-import os
-import platform
-import shutil
-import struct
-import subprocess
-import sys
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
-
 import warnings
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Iterable, List, Sequence, Tuple
 
+import numpy as np
 import yaml
 
 import matplotlib
@@ -29,1475 +19,449 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from ctypes import byref, c_double
+
+from src import bindings
+from src.bindings import get_build_metadata, set_params_from_dict
+
 ROOT = Path(__file__).resolve().parent
-CONFIG_PATH = ROOT / "configs" / "params.yaml"
-DESSERTS_CONFIG_PATH = ROOT / "configs" / "desserts.yaml"
-C_DIR = ROOT / "C"
-FIG_DIR = ROOT / "figures"
-TABLE_DIR = ROOT / "tables"
-BUILD_DIR = ROOT / "build"
-LIB_WIN = ROOT / "C" / "model.dll"
-LIB_LIN = ROOT / "C" / "libmodel.so"
-LIB_MAC = ROOT / "C" / "libmodel.dylib"
-BUILD_META = BUILD_DIR / "build.json"
-ENV_JSON = BUILD_DIR / "env.json"
-SANITY_JSON = BUILD_DIR / "sanity.json"
+CONFIGS_DIR = ROOT / "configs"
+FROZEN_DIR = CONFIGS_DIR / "frozen"
+DEFAULT_PARAMS_PATH = CONFIGS_DIR / "params.yaml"
 
-_BINDINGS = None
-
-
-def sha256(path: os.PathLike[str] | str) -> str:
-    digest = hashlib.sha256()
-    file_path = Path(path)
-    with file_path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def probe_arch() -> Tuple[str, str, int]:
-    system = platform.system()
-    machine = platform.machine()
-    bits = struct.calcsize("P") * 8
-    return system, machine, bits
-
-
-def write_json(path: Path, obj: Any) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(obj, handle, indent=2, sort_keys=True)
-
-
-def read_json(path: Path) -> Dict[str, Any]:
-    try:
-        with Path(path).open("r", encoding="utf-8") as handle:
-            return json.load(handle)
-    except FileNotFoundError:
-        return {}
-    except json.JSONDecodeError:
-        return {}
-
-
-def compute_source_hash() -> str:
-    model_c = C_DIR / "model.c"
-    model_h = C_DIR / "model.h"
-    return sha256(model_c) + sha256(model_h)
-
-
-def load_bindings() -> Any | None:
-    global _BINDINGS
-    try:
-        import src.bindings as bindings  # type: ignore[attr-defined]
-    except ModuleNotFoundError:
-        _BINDINGS = None
-        return None
-    _BINDINGS = importlib.reload(bindings)
-    return _BINDINGS
-
-
-def push_params_to_c(params: Dict[str, float]) -> None:
-    bindings = _BINDINGS or load_bindings()
-    if bindings is None:
-        return
-    lib = getattr(bindings, "lib", None)
-    if lib is None:
-        return
-    bindings.set_params_from_dict(params)
-
-
-def get_backend_spec() -> Tuple[Path, List[List[str]]]:
-    system = platform.system().lower()
-    if system.startswith("win"):
-        return (
-            LIB_WIN,
-            [
-                ["cl", "/nologo", "/LD", "C\\model.c", "/Fe:C\\model.dll"],
-                ["gcc", "-O3", "-shared", "-fPIC", "C/model.c", "-o", "C/model.dll"],
-            ],
-        )
-    if system == "darwin":
-        return (
-            LIB_MAC,
-            [["clang", "-O3", "-dynamiclib", "C/model.c", "-o", "C/libmodel.dylib"]],
-        )
-    return (
-        LIB_LIN,
-        [["gcc", "-O3", "-shared", "-fPIC", "C/model.c", "-o", "C/libmodel.so"]],
-    )
-
-
-def build_backend() -> Path:
-    lib_path, commands = get_backend_spec()
-    BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    source_hash = compute_source_hash()
-    system, machine, bits = probe_arch()
-    meta = read_json(BUILD_META)
-    if (
-        lib_path.exists()
-        and meta.get("hash") == source_hash
-        and meta.get("system") == system
-        and meta.get("machine") == machine
-        and meta.get("bits") == bits
-        and meta.get("compiler") in {cmd[0] for cmd in commands}
-    ):
-        print(f"C backend already built ({lib_path})")
-        return lib_path
-
-    errors: List[Dict[str, str]] = []
-    for cmd in commands:
-        try:
-            completed = subprocess.run(
-                cmd,
-                cwd=ROOT,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError as exc:
-            errors.append({"cmd": " ".join(cmd), "error": str(exc), "stdout": "", "stderr": ""})
-            continue
-        except subprocess.CalledProcessError as exc:
-            errors.append(
-                {
-                    "cmd": " ".join(cmd),
-                    "error": str(exc),
-                    "stdout": exc.stdout or "",
-                    "stderr": exc.stderr or "",
-                }
-            )
-            continue
-
-        compiler_id = cmd[0]
-        meta = {
-            "hash": source_hash,
-            "system": system,
-            "machine": machine,
-            "bits": bits,
-            "compiler": compiler_id,
-            "built_at": datetime.now(timezone.utc).isoformat(),
-        }
-        write_json(BUILD_META, meta)
-        print(f"Built C backend using {compiler_id}: {lib_path}")
-        if completed.stdout:
-            print(completed.stdout.strip())
-        if completed.stderr:
-            print(completed.stderr.strip())
-        return lib_path
-
-    if errors:
-        last = errors[-1]
-        message_lines = [
-            "Failed to build C backend.",
-            f"Last command: {last['cmd']}",
-            f"error: {last['error']}",
-        ]
-        if last["stdout"]:
-            message_lines.append("stdout:\n" + last["stdout"])
-        if last["stderr"]:
-            message_lines.append("stderr:\n" + last["stderr"])
-        raise RuntimeError("\n".join(message_lines))
-    raise RuntimeError("No suitable compiler command found for building backend.")
-
-
-def ensure_backend() -> Path | None:
-    lib_path, commands = get_backend_spec()
-    source_hash = compute_source_hash()
-    system, machine, bits = probe_arch()
-    meta = read_json(BUILD_META)
-    expected_compilers = {cmd[0] for cmd in commands}
-    if not lib_path.exists():
-        return build_backend()
-    if (
-        meta.get("hash") != source_hash
-        or meta.get("system") != system
-        or meta.get("machine") != machine
-        or meta.get("bits") != bits
-        or meta.get("compiler") not in expected_compilers
-    ):
-        return build_backend()
-    return lib_path
-
-
-def save_env() -> None:
-    env: Dict[str, Any] = {
-        "system": platform.system(),
-        "release": platform.release(),
-        "machine": platform.machine(),
-        "python_version": sys.version,
-        "pointer_bits": struct.calcsize("P") * 8,
-    }
-
-    try:
-        import numpy  # type: ignore
-
-        env["numpy_version"] = numpy.__version__
-    except ImportError:
-        pass
-
-    try:
-        import matplotlib as _matplotlib  # type: ignore
-
-        env["matplotlib_version"] = _matplotlib.__version__
-    except ImportError:
-        pass
-
-    meta = read_json(BUILD_META)
-    if meta:
-        env["compiler"] = meta.get("compiler")
-        env["build"] = meta
-
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        commit = result.stdout.strip()
-        if commit:
-            env["git_commit"] = commit
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
-    write_json(ENV_JSON, env)
-    print(f"Wrote {ENV_JSON}")
-
-
-def clean_outputs() -> None:
-    for path in (FIG_DIR, TABLE_DIR, BUILD_DIR):
-        if path.exists():
-            shutil.rmtree(path)
-            print(f"Removed {path}")
-
-DEFAULT_PLOT_WINDOW = 240.0
-
-NUTRITION_DEFAULTS: Dict[str, float] = {
-    "Vd_dL": 110.0,
-    "f_hep": 0.25,
-    "f_app0": 0.30,
-    "beta_fiber_per10g": 0.05,
-    "beta_fat_per10g": 0.06,
-    "k_fast0_min1": 0.35,
-    "k_slow0_min1": 0.07,
-    "alpha_prot_uU_mL_per_g": 0.06,
-    "k_prot_min1": 0.05,
-}
-
-nutrition_settings: Dict[str, float] = NUTRITION_DEFAULTS.copy()
-
-NEW_KEYS = {
-    "Gb_mg_dL",
-    "Ib_uU_mL",
-    "S_G_min1",
-    "p2_min1",
-    "p3_min1_per_uU_mL",
-    "n_min1",
-    "Vd_dL",
-    "f_hep",
-    "f_app0",
-    "beta_fiber_per10g",
-    "beta_fat_per10g",
-    "k_fast0_min1",
-    "k_slow0_min1",
-    "alpha_prot_uU_mL_per_g",
-    "k_prot_min1",
-    "dt_min",
-    "t_end_min",
-}
-
-TARGET_PEAK = 50.0
-TARGET_TOL = 5.0
-MAX_CAL_STEPS = 4
-FACTOR_MIN, FACTOR_MAX = 0.1, 200.0
 
 @dataclass
-class DoseProfile:
-    Afast: float
-    kfast: float
-    Aslow: float
-    kslow: float
-    Aprot: float
-    kprot: float
-
-    def scaled(self, factor: float) -> "DoseProfile":
-        return DoseProfile(
-            self.Afast * factor,
-            self.kfast,
-            self.Aslow * factor,
-            self.kslow,
-            self.Aprot,
-            self.kprot,
-        )
-
-    def total_dose(self) -> float:
-        dose_fast = self.Afast / self.kfast if self.kfast > 0.0 else 0.0
-        dose_slow = self.Aslow / self.kslow if self.kslow > 0.0 else 0.0
-        return dose_fast + dose_slow
-
-    def total_amplitude(self) -> float:
-        return self.Afast + self.Aslow
-
-    def harmonic_rate(self) -> float:
-        dose_fast = self.Afast / self.kfast if self.kfast > 0.0 else 0.0
-        dose_slow = self.Aslow / self.kslow if self.kslow > 0.0 else 0.0
-        total_dose = dose_fast + dose_slow
-        denom = 0.0
-        if dose_fast > 0.0 and self.kfast > 0.0:
-            denom += dose_fast / self.kfast
-        if dose_slow > 0.0 and self.kslow > 0.0:
-            denom += dose_slow / self.kslow
-        if total_dose > 0.0 and denom > 0.0:
-            return total_dose / denom
-        if self.Afast > 0.0 and self.kfast > 0.0:
-            return self.kfast
-        if self.Aslow > 0.0 and self.kslow > 0.0:
-            return self.kslow
-        return 1.0
+class MealAppearance:
+    A_fast: float
+    k_fast: float
+    A_slow: float
+    k_slow: float
+    A_prot: float
+    k_prot: float
+    dose_fast: float
+    dose_slow: float
+    dose_total: float
 
 
 @dataclass
 class SimulationResult:
-    times: List[float]
-    glucose: List[float]
-    insulin: List[float]
-    profile: DoseProfile
-
-
-@dataclass
-class DessertRun:
     name: str
-    result: SimulationResult
-    mode: str
-    converged: bool
-    specs: Dict[str, float | str | None | DoseProfile]
-
-
-class Simulator:
-    def __init__(self) -> None:
-        label, lib = load_backend()
-        self._label = label
-        self._lib = lib
-
-    @property
-    def label(self) -> str:
-        return self._label
-
-    def run(self, params: Dict[str, float], dt: float, t_end: float, profile: DoseProfile) -> SimulationResult:
-        if self._lib is not None:
-            push_params_to_c(params)
-            return self._run_c(dt, t_end, profile)
-        return self._run_python(params, dt, t_end, profile)
-
-    def _run_c(self, dt: float, t_end: float, profile: DoseProfile) -> SimulationResult:
-        assert self._lib is not None
-        steps = int(round(t_end / dt))
-        nsteps = steps + 1
-        times = [i * dt for i in range(nsteps)]
-
-        g_arr = (ctypes.c_double * nsteps)()
-        i_arr = (ctypes.c_double * nsteps)()
-
-        self._lib.simulate_dual(
-            g_arr,
-            i_arr,
-            nsteps,
-            dt,
-            profile.Afast,
-            profile.kfast,
-            profile.Aslow,
-            profile.kslow,
-            profile.Aprot,
-            profile.kprot,
-        )
-
-        glucose = [g_arr[i] for i in range(nsteps)]
-        insulin = [i_arr[i] for i in range(nsteps)]
-        return SimulationResult(times, glucose, insulin, profile)
-
-    def _run_python(self, params: Dict[str, float], dt: float, t_end: float, profile: DoseProfile) -> SimulationResult:
-        steps = int(round(t_end / dt))
-        nsteps = steps + 1
-        times = [i * dt for i in range(nsteps)]
-
-        G = params["Gb_mg_dL"]
-        X = 0.0
-        I = params["Ib_uU_mL"]
-        glucose: List[float] = []
-        insulin: List[float] = []
-
-        def deriv(t: float, g: float, x: float, ins: float) -> Tuple[float, float, float]:
-            fast = profile.Afast * math.exp(-profile.kfast * t)
-            slow = profile.Aslow * math.exp(-profile.kslow * t)
-            D = fast + slow
-            iprot = profile.Aprot * math.exp(-profile.kprot * t)
-            dG = -(params["S_G_min1"] + x) * (g - params["Gb_mg_dL"]) + D
-            dX = -params["p2_min1"] * x + params["p3_min1_per_uU_mL"] * (ins - params["Ib_uU_mL"])
-            dI = -params["n_min1"] * (ins - params["Ib_uU_mL"]) + iprot
-            return dG, dX, dI
-
-        for idx, current_time in enumerate(times):
-            glucose.append(G)
-            insulin.append(I)
-            if idx == nsteps - 1:
-                break
-            k1 = deriv(current_time, G, X, I)
-            G1 = G + 0.5 * dt * k1[0]
-            X1 = X + 0.5 * dt * k1[1]
-            I1 = I + 0.5 * dt * k1[2]
-
-            k2 = deriv(current_time + 0.5 * dt, G1, X1, I1)
-            G2 = G + 0.5 * dt * k2[0]
-            X2 = X + 0.5 * dt * k2[1]
-            I2 = I + 0.5 * dt * k2[2]
-
-            k3 = deriv(current_time + 0.5 * dt, G2, X2, I2)
-            G3 = G + dt * k3[0]
-            X3 = X + dt * k3[1]
-            I3 = I + dt * k3[2]
-
-            k4 = deriv(current_time + dt, G3, X3, I3)
-
-            G += (dt / 6.0) * (k1[0] + 2.0 * k2[0] + 2.0 * k3[0] + k4[0])
-            X += (dt / 6.0) * (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1])
-            I += (dt / 6.0) * (k1[2] + 2.0 * k2[2] + 2.0 * k3[2] + k4[2])
-
-        return SimulationResult(times, glucose, insulin, profile)
-
-
-def load_backend() -> Tuple[str, ctypes.CDLL | None]:
-    ensure_backend()
-    bindings = load_bindings()
-    lib = getattr(bindings, "lib", None) if bindings is not None else None
-    if lib is None:
-        print("Using pure-Python RK4 backend.")
-        return "python", None
-    print(f"Using C backend: {Path(lib._name).resolve()}")  # type: ignore[attr-defined]
-    return "c", lib
-def load_params_yaml(path: Path) -> Dict[str, float]:
-    with path.open("r", encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or {}
-    if not isinstance(raw, dict):
-        raise ValueError(f"Parameters file {path} must be a mapping")
-
-    data = dict(raw)
-    legacy = all(key in data for key in ("p1", "p2", "p3", "p4"))
-    has_named = {"S_G_min1", "p2_min1", "p3_min1_per_uU_mL", "n_min1"}.issubset(data)
-    if legacy and not has_named:
-        warnings.warn(
-            "Detected legacy p1..p4 keys; mapping to explicit unit-encoded names.",
-            RuntimeWarning,
-        )
-        data.setdefault("S_G_min1", float(data["p1"]))
-        data.setdefault("p2_min1", float(data["p2"]))
-        data.setdefault("p3_min1_per_uU_mL", float(data["p3"]))
-        data.setdefault("n_min1", float(data["p4"]))
-        data.setdefault("Gb_mg_dL", float(data.get("Gb", 90.0)))
-        data.setdefault("Ib_uU_mL", float(data.get("Ib", 7.0)))
-        data.setdefault("dt_min", float(data.get("dt", 0.5)))
-        data.setdefault("t_end_min", float(data.get("t_end", 1440.0)))
-        for key, default in NUTRITION_DEFAULTS.items():
-            data.setdefault(key, default)
-
-    missing = [key for key in NEW_KEYS if key not in data]
-    if missing:
-        raise ValueError(f"Missing keys in {path}: {sorted(missing)}")
-
-    params: Dict[str, float] = {}
-    for key in NEW_KEYS:
-        params[key] = float(data[key])
-
-    if "plot_window_min" in data:
-        params["plot_window_min"] = float(data["plot_window_min"])
-    return params
-
-
-def load_config(path: Path) -> Dict[str, float]:
-    global nutrition_settings
-    params = load_params_yaml(path)
-    for key in NUTRITION_DEFAULTS:
-        nutrition_settings[key] = params[key]
-    params.setdefault("plot_window_min", DEFAULT_PLOT_WINDOW)
-    params["dt"] = params["dt_min"]
-    params["t_end"] = params["t_end_min"]
-    return params
-
-
-def clip(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
-
-
-def nutrition_to_profile(
-    carbs_g: float,
-    sugars_g: float,
-    fiber_g: float,
-    fat_g: float,
-    protein_g: float,
-    settings: Dict[str, float],
-) -> Tuple[DoseProfile, Dict[str, float]]:
-    carbs_g = max(0.0, carbs_g)
-    sugars_g = max(0.0, sugars_g)
-    fiber_g = max(0.0, fiber_g)
-    fat_g = max(0.0, fat_g)
-    protein_g = max(0.0, protein_g)
-
-    avail_carbs_g = max(0.0, carbs_g - 0.5 * fiber_g)
-    f_fast = 0.0 if carbs_g <= 0.0 else clip(sugars_g / carbs_g, 0.0, 1.0)
-    f_app = clip(
-        settings["f_app0"] * (1.0 - settings["beta_fiber_per10g"] * (fiber_g / 10.0)),
-        0.05,
-        0.60,
-    )
-    k_mod = 1.0 / (
-        1.0
-        + settings["beta_fat_per10g"] * (fat_g / 10.0)
-        + settings["beta_fiber_per10g"] * (fiber_g / 10.0)
-    )
-    kfast = settings["k_fast0_min1"] * k_mod
-    kslow = settings["k_slow0_min1"] * k_mod
-    dose_total_mgdL = (
-        (avail_carbs_g * f_app * 1000.0) / settings["Vd_dL"]
-    ) * (1.0 - settings["f_hep"])
-    dose_fast = dose_total_mgdL * f_fast
-    dose_slow = dose_total_mgdL * (1.0 - f_fast)
-    Afast = kfast * dose_fast
-    Aslow = kslow * dose_slow
-    Aprot = settings["alpha_prot_uU_mL_per_g"] * protein_g
-
-    profile = DoseProfile(
-        Afast,
-        kfast,
-        Aslow,
-        kslow,
-        Aprot,
-        settings["k_prot_min1"],
-    )
-    extras = {
-        "dose_mgdL": profile.total_dose(),
-        "f_fast": f_fast,
-        "f_app": f_app,
-        "k_mod": k_mod,
-        "kfast": kfast,
-        "kslow": kslow,
-    }
-    return profile, extras
-
-
-def build_dessert_entry(
-    name: str,
-    data: Dict[str, Any],
-    settings: Dict[str, float],
-) -> Dict[str, float | str | None | DoseProfile]:
-    carbs_g = float(data.get("carbs_g", 0.0) or 0.0)
-    sugars_g = float(data.get("sugars_g", 0.0) or 0.0)
-    fiber_g = float(data.get("fiber_g", 0.0) or 0.0)
-    fat_g = float(data.get("fat_g", 0.0) or 0.0)
-    protein_g = float(data.get("protein_g", 0.0) or 0.0)
-    profile, extras = nutrition_to_profile(
-        carbs_g, sugars_g, fiber_g, fat_g, protein_g, settings
-    )
-    entry: Dict[str, float | str | None | DoseProfile] = {
-        "profile": profile,
-        "carbs_g": carbs_g,
-        "sugars_g": sugars_g,
-        "fiber_g": fiber_g,
-        "fat_g": fat_g,
-        "protein_g": protein_g,
-        "portion_g": (
-            float(data.get("portion_g", 0.0))
-            if data.get("portion_g") is not None
-            else None
-        ),
-        "barcode": data.get("barcode"),
-    }
-    entry.update(extras)
-    return entry
-
-
-def load_dessert_catalog(path: Path) -> Dict[str, Dict[str, float | str | None | DoseProfile]]:
-    with path.open("r", encoding="utf-8") as handle:
-        raw_data = yaml.safe_load(handle) or {}
-    if not isinstance(raw_data, dict):
-        raise ValueError(f"Dessert catalog {path} must be a mapping")
-    desserts: Dict[str, Dict[str, float | str | None | DoseProfile]] = {}
-    for name, data in sorted(raw_data.items()):
-        if not isinstance(data, dict):
-            raise ValueError(f"Dessert entry {name} must be a mapping")
-        desserts[name] = build_dessert_entry(name, data, nutrition_settings)
-    return desserts
-
-
-def load_frozen_catalog(directory: Path) -> Dict[str, Dict[str, float | str | None | DoseProfile]]:
-    desserts: Dict[str, Dict[str, float | str | None | DoseProfile]] = {}
-    for yaml_path in sorted(directory.glob("*.yaml")):
-        with yaml_path.open("r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle) or {}
-        if not isinstance(data, dict):
-            raise ValueError(f"Frozen dessert file {yaml_path} must be a mapping")
-        name = str(data.get("name") or yaml_path.stem)
-        desserts[name] = build_dessert_entry(name, data, nutrition_settings)
-    return desserts
-
-
-def clamp(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
-
-
-def simulate_desserts(
-    simulator: Simulator,
-    params: Dict[str, float],
-    dt: float,
-    t_end: float,
-    desserts: Dict[str, Dict[str, float | str | None | DoseProfile]],
-    calibrate: bool,
-) -> List[DessertRun]:
-    runs: List[DessertRun] = []
-    for name, specs in sorted(desserts.items()):
-        base_profile = specs["profile"]
-        if calibrate:
-            result, converged = calibrate_profile(
-                simulator, params, dt, t_end, base_profile
-            )
-            mode = "calibrated"
-        else:
-            result = simulator.run(params, dt, t_end, base_profile)
-            converged = False
-            mode = "dose-driven"
-        runs.append(
-            DessertRun(
-                name=name,
-                result=result,
-                mode=mode,
-                converged=converged,
-                specs=specs,
-            )
-        )
-    return runs
-
-
-def calibrate_profile(
-    simulator: Simulator,
-    params: Dict[str, float],
-    dt: float,
-    t_end: float,
-    base_profile: DoseProfile,
-) -> Tuple[SimulationResult, bool]:
-    if base_profile.Afast <= 0.0 and base_profile.Aslow <= 0.0:
-        result = simulator.run(params, dt, t_end, base_profile)
-        return result, False
-
-    factor = 1.0
-    result: SimulationResult | None = None
-    for step in range(1, MAX_CAL_STEPS + 1):
-        profile = base_profile.scaled(factor)
-        result = simulator.run(params, dt, t_end, profile)
-        peak_delta = max(result.glucose) - params["Gb_mg_dL"]
-        print(f"  calibration iter {step}: scale={factor:.3f}, peakΔG={peak_delta:.3f}")
-        if abs(peak_delta - TARGET_PEAK) <= TARGET_TOL:
-            return result, True
-        if peak_delta <= 1e-8:
-            factor = clamp(factor * 1.5, FACTOR_MIN, FACTOR_MAX)
-        else:
-            factor = clamp(factor * (TARGET_PEAK / peak_delta), FACTOR_MIN, FACTOR_MAX)
-    assert result is not None
-    return result, False
-
-
-def integrate_trapezoid(
-    times: Sequence[float],
-    values: Sequence[float],
-    limit: float,
-    subtract: float | None = None,
-    clamp_zero: bool = False,
-) -> float:
-    total = 0.0
-    for idx in range(1, len(times)):
-        t0 = times[idx - 1]
-        t1 = times[idx]
-        if t0 >= limit:
-            break
-        span_end = min(t1, limit)
-        if span_end <= t0:
-            continue
-        v0 = values[idx - 1]
-        v1 = values[idx]
-        if subtract is not None:
-            v0 -= subtract
-            v1 -= subtract
-        if clamp_zero:
-            v0 = max(0.0, v0)
-            v1 = max(0.0, v1)
-        total += 0.5 * (v0 + v1) * (span_end - t0)
-        if t1 >= limit:
-            break
-    return total
-
-
-def compute_metrics(
-    result: SimulationResult, params: Dict[str, float]
-) -> Dict[str, float]:
-    times = result.times
-    glucose = result.glucose
-    insulin = result.insulin
-    peak_g = max(glucose)
-    t_peak_g = times[glucose.index(peak_g)] if glucose else float("nan")
-    peak_i = max(insulin)
-    t_peak_i = times[insulin.index(peak_i)] if insulin else float("nan")
-    gb = params["Gb_mg_dL"]
-    nadir_window = [g for t, g in zip(times, glucose) if t <= 240.0]
-    nadir_g = min(nadir_window) if nadir_window else float("nan")
-
-    baseline_return = float("nan")
-    for t, g in zip(times, glucose):
-        if abs(g - gb) <= 5.0:
-            baseline_return = t
-            break
-
-    iauc_120 = integrate_trapezoid(times, glucose, 120.0, subtract=gb, clamp_zero=True)
-    iauc_240 = integrate_trapezoid(times, glucose, 240.0, subtract=gb, clamp_zero=True)
-    aucg_240 = integrate_trapezoid(times, glucose, 240.0)
-    auci_240 = integrate_trapezoid(times, insulin, 240.0)
-
-    return {
-        "peak_G": peak_g,
-        "t_peak_G": t_peak_g,
-        "peak_delta": peak_g - gb,
-        "nadir_G_0_240": nadir_g,
-        "baseline_return_min": baseline_return,
-        "iAUC_0_120": iauc_120,
-        "iAUC_0_240": iauc_240,
-        "AUCG_0_240": aucg_240,
-        "peak_I": peak_i,
-        "t_peak_I": t_peak_i,
-        "AUCI_0_240": auci_240,
-    }
-
-
-def ensure_dirs(*paths: os.PathLike[str] | str) -> None:
-    for path in paths:
-        os.makedirs(path, exist_ok=True)
-
-
-def ensure_directories() -> None:
-    ensure_dirs(FIG_DIR, TABLE_DIR)
-
-
-def relative_to_root(path: Path) -> str:
-    try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return os.path.relpath(path, ROOT)
-
-
-def save_dual(
-    fig: matplotlib.figure.Figure,
-    base_name: str,
-    t: Sequence[float],
-    ys: Sequence[Sequence[float]],
-    window: float,
-    zoom_dir: os.PathLike[str] | str,
-    full_dir: os.PathLike[str] | str,
-    dpi: int,
-) -> None:
-    import numpy as np
-
-    ensure_dirs(zoom_dir, full_dir)
-    t_arr = np.asarray(t, dtype=float)
-    y_arrays = [np.asarray(y, dtype=float) for y in ys]
-    if t_arr.size == 0:
-        t_arr = np.array([0.0, window], dtype=float)
-        if not y_arrays:
-            y_arrays = [np.zeros_like(t_arr)]
-        else:
-            y_arrays = [np.zeros_like(t_arr) for _ in y_arrays]
-    mask = t_arr <= window
-    if not mask.any():
-        mask = np.ones_like(t_arr, dtype=bool)
-    ystack = np.column_stack([arr[mask] for arr in y_arrays])
-    ymin = float(np.nanmin(ystack))
-    ymax = float(np.nanmax(ystack))
-    if not (np.isfinite(ymin) and np.isfinite(ymax)):
-        ymin, ymax = 0.0, 1.0
-    if ymax <= ymin:
-        ymax = ymin + 1.0
-    pad = 0.02 * (ymax - ymin)
-    ymin -= pad
-    ymax += pad
-    ax = fig.axes[0]
-    ax.set_xlim(0.0, window)
-    ax.set_ylim(ymin, ymax)
-    fig.tight_layout()
-    fig.savefig(os.path.join(str(zoom_dir), base_name), dpi=dpi)
-
-    ax.set_xlim(0.0, t_arr[-1])
-    ax.relim()
-    ax.autoscale(axis="y", tight=False)
-    fig.tight_layout()
-    fig.savefig(
-        os.path.join(str(full_dir), base_name.replace(".png", "_full.png")),
-        dpi=dpi,
-    )
-
-
-def save_line_plot(
-    x: Sequence[float],
-    y: Sequence[float],
-    base_name: str,
-    title: str,
-    ylabel: str,
-    window: float,
-    zoom_dir: os.PathLike[str] | str,
-    full_dir: os.PathLike[str] | str,
-    dpi: int,
-) -> Tuple[Path, Path]:
-    fig, ax = plt.subplots(figsize=(6.0, 3.4))
-    ax.plot(x, y, lw=1.8)
-    ax.set_title(title)
-    ax.set_xlabel("Time (min)")
-    ax.set_ylabel(ylabel)
-    ax.grid(True)
-    save_dual(fig, base_name, x, [y], window, zoom_dir, full_dir, dpi)
-    plt.close(fig)
-    return Path(zoom_dir) / base_name, Path(full_dir) / base_name.replace(".png", "_full.png")
-
-
-def save_overlay(
-    curves: Iterable[Tuple[str, Sequence[float], Sequence[float]]],
-    base_name: str,
-    title: str,
-    ylabel: str,
-    window: float,
-    zoom_dir: os.PathLike[str] | str,
-    full_dir: os.PathLike[str] | str,
-    dpi: int,
-) -> Tuple[Path, Path]:
-    fig, ax = plt.subplots(figsize=(6.0, 3.4))
-    t_ref: Sequence[float] | None = None
-    y_values: List[Sequence[float]] = []
-    has_curves = False
-    for name, x, y in curves:
-        ax.plot(x, y, lw=1.5, label=name)
-        if t_ref is None:
-            t_ref = x
-        y_values.append(y)
-        has_curves = True
-    if t_ref is None:
-        t_ref = [0.0, window]
-        y_values = [[0.0, 0.0]]
-    ax.set_title(title)
-    ax.set_xlabel("Time (min)")
-    ax.set_ylabel(ylabel)
-    ax.grid(True)
-    if has_curves:
-        ax.legend()
-    save_dual(fig, base_name, t_ref, y_values, window, zoom_dir, full_dir, dpi)
-    plt.close(fig)
-    return Path(zoom_dir) / base_name, Path(full_dir) / base_name.replace(".png", "_full.png")
-
-
-def make_dose_curves(profile: DoseProfile, duration: float = 360.0, step: float = 0.5) -> Tuple[List[float], List[float], List[float], List[float]]:
-    n = int(round(duration / step)) + 1
-    times = [i * step for i in range(n)]
-    fast = [profile.Afast * math.exp(-profile.kfast * t) for t in times]
-    slow = [profile.Aslow * math.exp(-profile.kslow * t) for t in times]
-    total = [fast[i] + slow[i] for i in range(n)]
-    return times, fast, slow, total
-
-
-def save_d_components(
-    name: str,
-    profile: DoseProfile,
-    plot_window: float,
-    t_end: float,
-    zoom_dir: os.PathLike[str] | str,
-    full_dir: os.PathLike[str] | str,
-    dpi: int,
-) -> Tuple[Path, Path]:
-    times, fast, slow, total = make_dose_curves(profile, duration=t_end)
-    base_name = f"D_components_{name}.png"
-    fig, ax = plt.subplots(figsize=(6.0, 3.4))
-    ax.plot(times, fast, label="fast", lw=1.6)
-    ax.plot(times, slow, label="slow", lw=1.6)
-    ax.plot(times, total, label="total", lw=2.0, linestyle="--")
-    ax.set_title(f"{name.title()} appearance components")
-    ax.set_xlabel("Time (min)")
-    ax.set_ylabel("D(t) (mg/dL·min⁻¹)")
-    ax.grid(True)
-    ax.legend()
-    save_dual(fig, base_name, times, [fast, slow, total], plot_window, zoom_dir, full_dir, dpi)
-    plt.close(fig)
-    return Path(zoom_dir) / base_name, Path(full_dir) / base_name.replace(".png", "_full.png")
-
-
-def write_summary(rows: List[Dict[str, object]]) -> None:
-    base_fields = [
-        "name",
-        "mode",
-        "backend",
-        "input_source",
+    times: np.ndarray
+    glucose: np.ndarray
+    insulin: np.ndarray
+    d_fast: np.ndarray
+    d_slow: np.ndarray
+    u: np.ndarray
+
+
+def load_params_yaml(path: Path = DEFAULT_PARAMS_PATH) -> Dict[str, float]:
+    required_keys = {
         "Gb_mg_dL",
         "Ib_uU_mL",
-        "peak_G",
-        "t_peak_G",
-        "nadir_G_0_240",
-        "baseline_return_min",
-        "iAUC_0_120",
-        "iAUC_0_240",
-        "AUCG_0_240",
-        "peak_I",
-        "t_peak_I",
-        "AUCI_0_240",
-        "carbs_g",
-        "sugars_g",
-        "fiber_g",
-        "fat_g",
-        "protein_g",
-        "f_fast",
-        "f_app",
-        "k_mod",
-        "kfast",
-        "kslow",
-        "dose_mgdL",
-        "Afast",
-        "Aslow",
-        "Aprot",
-        "peak_delta",
-        "kprot",
-        "portion_g",
-        "barcode",
-    ]
-    fieldnames = list(base_fields)
-    for row in rows:
-        for key in row.keys():
-            if key not in fieldnames:
-                fieldnames.append(key)
-    with (TABLE_DIR / "summary.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-    print(f"Wrote {TABLE_DIR / 'summary.csv'}")
+        "S_G_min1",
+        "p2_min1",
+        "p3_min1_per_uU_mL",
+        "n_min1",
+        "Vd_dL",
+        "f_hep",
+        "f_app0",
+        "beta_fiber_per10g",
+        "beta_fat_per10g",
+        "k_fast0_min1",
+        "k_slow0_min1",
+        "alpha_prot_uU_mL_per_g",
+        "k_prot_min1",
+        "dt_min",
+        "t_end_min",
+    }
+    with Path(path).open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    if not isinstance(data, dict):
+        raise ValueError("params.yaml must contain a mapping")
 
-def write_manifest(entries: List[Dict[str, str]]) -> None:
-    manifest_path = TABLE_DIR / "manifest.csv"
-    fieldnames = ["path", "caption"]
-    with manifest_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        for entry in entries:
-            writer.writerow(entry)
-    print(f"Wrote {manifest_path}")
+    legacy_map = {"p1": "S_G_min1", "p2": "p2_min1", "p3": "p3_min1_per_uU_mL", "p4": "n_min1"}
+    used_legacy = False
+    for legacy_key, new_key in legacy_map.items():
+        if legacy_key in data and new_key not in data:
+            data[new_key] = data[legacy_key]
+            used_legacy = True
+    if used_legacy:
+        warnings.warn("Mapped legacy p1..p4 keys to unit-encoded names", RuntimeWarning, stacklevel=2)
+    if "Gb_mg_dL" not in data:
+        data["Gb_mg_dL"] = 90.0
+    if "Ib_uU_mL" not in data:
+        data["Ib_uU_mL"] = 7.0
+
+    missing = sorted(required_keys - data.keys())
+    if missing:
+        raise KeyError(f"Missing parameters: {', '.join(missing)}")
+
+    return {key: float(data[key]) for key in required_keys}
 
 
-def run_pipeline(
-    simulator: Simulator,
-    params: Dict[str, float],
-    dt: float,
-    t_end: float,
-    plot_window_min: float,
-    plot_zoom_dir: Path,
-    plot_full_dir: Path,
-    dpi: int,
-    desserts: Dict[str, Dict[str, float | str | None | DoseProfile]],
-    calibrate: bool,
-    input_source: str,
-    emit_plots: bool,
-    summary_only: bool,
-) -> List[DessertRun]:
-    ensure_directories()
-    if emit_plots:
-        ensure_dirs(plot_zoom_dir, plot_full_dir)
-    summary_rows: List[Dict[str, object]] = []
-    glucose_curves: List[Tuple[str, List[float], List[float]]] = []
-    insulin_curves: List[Tuple[str, List[float], List[float]]] = []
-    dose_curves: List[Tuple[str, List[float], List[float]]] = []
-    manifest_entries: List[Dict[str, str]] = []
-
-    mode_label = "calibrated" if calibrate else "dose-driven"
-    print(f"Running dessert pipeline ({mode_label}) with backend={simulator.label}...")
-
-    runs = simulate_desserts(simulator, params, dt, t_end, desserts, calibrate)
-
-    for run in runs:
-        name = run.name
-        specs = run.specs
-        result = run.result
-        mode = run.mode
-        final_profile = result.profile
-
-        metrics = compute_metrics(result, params)
-        if emit_plots:
-            glucose_curves.append((name, result.times, result.glucose))
-            insulin_curves.append((name, result.times, result.insulin))
-            dose_times, _, _, dose_total = make_dose_curves(final_profile, duration=t_end)
-            dose_curves.append((name, dose_times, dose_total))
-
-        final_dose = final_profile.total_dose()
-        summary_row: Dict[str, object] = {
-            "name": name,
-            "backend": simulator.label,
-            "mode": mode,
-            "input_source": input_source,
-            "Gb_mg_dL": params["Gb_mg_dL"],
-            "Ib_uU_mL": params["Ib_uU_mL"],
-            "peak_G": metrics["peak_G"],
-            "t_peak_G": metrics["t_peak_G"],
-            "nadir_G_0_240": metrics["nadir_G_0_240"],
-            "baseline_return_min": metrics["baseline_return_min"],
-            "iAUC_0_120": metrics["iAUC_0_120"],
-            "iAUC_0_240": metrics["iAUC_0_240"],
-            "AUCG_0_240": metrics["AUCG_0_240"],
-            "peak_I": metrics["peak_I"],
-            "t_peak_I": metrics["t_peak_I"],
-            "AUCI_0_240": metrics["AUCI_0_240"],
-            "dose_mgdL": final_dose,
-            "Afast": final_profile.Afast,
-            "Aslow": final_profile.Aslow,
-            "Aprot": final_profile.Aprot,
-            "kfast": final_profile.kfast,
-            "kslow": final_profile.kslow,
-            "kprot": final_profile.kprot,
-            "carbs_g": specs.get("carbs_g"),
-            "sugars_g": specs.get("sugars_g"),
-            "fiber_g": specs.get("fiber_g"),
-            "fat_g": specs.get("fat_g"),
-            "protein_g": specs.get("protein_g"),
-            "f_fast": specs.get("f_fast"),
-            "f_app": specs.get("f_app"),
-            "k_mod": specs.get("k_mod"),
-            "portion_g": specs.get("portion_g"),
-            "barcode": specs.get("barcode"),
-            "peak_delta": metrics["peak_delta"],
-        }
-        if calibrate:
-            summary_row["calibration_converged"] = run.converged
-        summary_rows.append(summary_row)
-
-        print(
-            f"{name:12s} | backend={simulator.label:6s} | mode={mode:11s} | "
-            f"source={input_source:8s} | peakΔG={metrics['peak_delta']:+6.2f} mg/dL @ {metrics['t_peak_G']:.1f} min | "
-            f"iAUC₀₋₁₂₀={metrics['iAUC_0_120']:.1f} | peakI={metrics['peak_I']:.2f}"
-        )
-
-        if emit_plots:
-            glucose_base = f"{name}_glucose.png"
-            insulin_base = f"{name}_insulin.png"
-            glucose_zoom, glucose_full = save_line_plot(
-                result.times,
-                result.glucose,
-                glucose_base,
-                f"{name.title()} glucose",
-                "Glucose (mg/dL)",
-                plot_window_min,
-                plot_zoom_dir,
-                plot_full_dir,
-                dpi,
-            )
-            insulin_zoom, insulin_full = save_line_plot(
-                result.times,
-                result.insulin,
-                insulin_base,
-                f"{name.title()} insulin",
-                "Insulin (mU/L)",
-                plot_window_min,
-                plot_zoom_dir,
-                plot_full_dir,
-                dpi,
-            )
-            components_zoom, components_full = save_d_components(
-                name,
-                final_profile,
-                plot_window_min,
-                t_end,
-                plot_zoom_dir,
-                plot_full_dir,
-                dpi,
-            )
-
-            manifest_entries.extend(
-                [
-                    {
-                        "path": relative_to_root(glucose_zoom),
-                        "caption": f"{name.title()} glucose curve",
-                    },
-                    {
-                        "path": relative_to_root(glucose_full),
-                        "caption": f"{name.title()} glucose curve (full)",
-                    },
-                    {
-                        "path": relative_to_root(insulin_zoom),
-                        "caption": f"{name.title()} insulin curve",
-                    },
-                    {
-                        "path": relative_to_root(insulin_full),
-                        "caption": f"{name.title()} insulin curve (full)",
-                    },
-                    {
-                        "path": relative_to_root(components_zoom),
-                        "caption": f"{name.title()} appearance components",
-                    },
-                    {
-                        "path": relative_to_root(components_full),
-                        "caption": f"{name.title()} appearance components (full)",
-                    },
-                ]
-            )
-
-    if emit_plots:
-        overlay_glucose_base = "glucose_overlay.png"
-        overlay_insulin_base = "insulin_overlay.png"
-        overlay_dose_base = "D_overlay.png"
-
-        overlay_glucose, overlay_glucose_full = save_overlay(
-            glucose_curves,
-            overlay_glucose_base,
-            "Glucose overlay",
-            "Glucose (mg/dL)",
-            plot_window_min,
-            plot_zoom_dir,
-            plot_full_dir,
-            dpi,
-        )
-        overlay_insulin, overlay_insulin_full = save_overlay(
-            insulin_curves,
-            overlay_insulin_base,
-            "Insulin overlay",
-            "Insulin (mU/L)",
-            plot_window_min,
-            plot_zoom_dir,
-            plot_full_dir,
-            dpi,
-        )
-        overlay_dose, overlay_dose_full = save_overlay(
-            dose_curves,
-            overlay_dose_base,
-            "Dessert appearance D(t)",
-            "Dose (mg/dL·min⁻¹)",
-            plot_window_min,
-            plot_zoom_dir,
-            plot_full_dir,
-            dpi,
-        )
-
-        manifest_entries.extend(
-            [
-                {
-                    "path": relative_to_root(overlay_glucose),
-                    "caption": "Dessert glucose overlay",
-                },
-                {
-                    "path": relative_to_root(overlay_glucose_full),
-                    "caption": "Dessert glucose overlay (full)",
-                },
-                {
-                    "path": relative_to_root(overlay_insulin),
-                    "caption": "Dessert insulin overlay",
-                },
-                {
-                    "path": relative_to_root(overlay_insulin_full),
-                    "caption": "Dessert insulin overlay (full)",
-                },
-                {
-                    "path": relative_to_root(overlay_dose),
-                    "caption": "Dessert appearance overlay",
-                },
-                {
-                    "path": relative_to_root(overlay_dose_full),
-                    "caption": "Dessert appearance overlay (full)",
-                },
-            ]
-        )
-
-    write_summary(summary_rows)
-    if emit_plots and manifest_entries and not summary_only:
-        write_manifest(manifest_entries)
-
-    return runs
+def _clip(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
 
 
-def run_sanity(
-    simulator: Simulator,
-    params: Dict[str, float],
-    dt: float,
-    t_end: float,
-    desserts: Dict[str, Dict[str, float | str | None | DoseProfile]],
-    runs: List[DessertRun] | None,
-    calibrate: bool,
-) -> None:
-    print(f"Running sanity checks with backend={simulator.label}...")
+def compute_meal_appearance(dessert: Dict[str, float], params: Dict[str, float], calibrate: bool) -> MealAppearance:
+    carbs = float(dessert.get("carbs_g", 0.0))
+    sugars = float(dessert.get("sugars_g", 0.0))
+    fiber = float(dessert.get("fiber_g", 0.0))
+    fat = float(dessert.get("fat_g", 0.0))
+    protein = float(dessert.get("protein_g", 0.0))
 
-    if runs is None:
-        runs = simulate_desserts(simulator, params, dt, t_end, desserts, calibrate)
+    C_avail = max(0.0, carbs - 0.5 * fiber)
+    carbs_safe = carbs if carbs > 1e-9 else 1e-9
+    f_fast = _clip(sugars / carbs_safe, 0.0, 1.0)
+    f_app0 = params["f_app0"]
+    beta_fiber = params["beta_fiber_per10g"] * fiber / 10.0
+    f_app = _clip(f_app0 * (1.0 - beta_fiber), 0.05, 0.60)
+    k_mod = 1.0 / (1.0 + params["beta_fat_per10g"] * fat / 10.0 + params["beta_fiber_per10g"] * fiber / 10.0)
+    k_fast = params["k_fast0_min1"] * k_mod
+    k_slow = params["k_slow0_min1"] * k_mod
 
-    run_map = {run.name: run for run in runs}
-    ordered_names = sorted(desserts.keys())
-    dt_check: Dict[str, Any]
+    Vd = params["Vd_dL"]
+    f_hep = params["f_hep"]
+    dose_total = (1000.0 * C_avail / Vd) * f_app * (1.0 - f_hep)
 
-    if ordered_names:
-        first_name = ordered_names[0]
-        base_profile = desserts[first_name]["profile"]
-        base_result = simulator.run(params, dt, t_end, base_profile)
-        half_result = simulator.run(params, dt / 2.0, t_end, base_profile)
-        base_metrics = compute_metrics(base_result, params)
-        half_metrics = compute_metrics(half_result, params)
-        peak_diff = abs(base_metrics["peak_G"] - half_metrics["peak_G"])
-        t_peak_diff = abs(base_metrics["t_peak_G"] - half_metrics["t_peak_G"])
-        passed = peak_diff <= 1.0 and t_peak_diff <= 2.0
-        dt_check = {
-            "dessert": first_name,
-            "peak_G_base": base_metrics["peak_G"],
-            "peak_G_dt_half": half_metrics["peak_G"],
-            "t_peak_base": base_metrics["t_peak_G"],
-            "t_peak_dt_half": half_metrics["t_peak_G"],
-            "peak_diff": peak_diff,
-            "t_peak_diff": t_peak_diff,
-            "passed": passed,
-        }
-        status = "PASS" if passed else "FAIL"
-        print(
-            f"dt-halving ({first_name}): peakΔ={peak_diff:.3f} mg/dL, tΔ={t_peak_diff:.3f} min -> {status}"
-        )
-        if not passed:
-            raise AssertionError(
-                "dt-halving check failed: Δpeak_G>1 mg/dL or Δt_peak>2 min"
-            )
-    else:
-        dt_check = {"status": "skipped", "reason": "no desserts configured"}
-        print("dt-halving check skipped (no desserts configured)")
+    dose_fast = f_fast * dose_total
+    dose_slow = (1.0 - f_fast) * dose_total
+    if calibrate and dose_total > 0:
+        dose_fast = dose_slow = 0.5 * dose_total
 
-    end_state_entries: List[Dict[str, Any]] = []
-    gb = params["Gb_mg_dL"]
-    ib = params["Ib_uU_mL"]
-    for name, run in sorted(run_map.items()):
-        final_g = run.result.glucose[-1]
-        final_i = run.result.insulin[-1]
-        g_diff = abs(final_g - gb)
-        i_diff = abs(final_i - ib)
-        passed = g_diff <= 5.0 and i_diff <= 0.5
-        end_state_entries.append(
-            {
-                "name": name,
-                "mode": run.mode,
-                "final_G": final_g,
-                "final_I": final_i,
-                "delta_G": g_diff,
-                "delta_I": i_diff,
-                "passed": passed,
-            }
-        )
-        status = "PASS" if passed else "FAIL"
-        print(
-            f"end-state ({name}): |ΔG|={g_diff:.3f} mg/dL, |ΔI|={i_diff:.3f} μU/mL -> {status}"
-        )
+    A_fast = k_fast * dose_fast
+    A_slow = k_slow * dose_slow
 
-    report = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "backend": simulator.label,
-        "pipeline_mode": "calibrated" if calibrate else "dose-driven",
-        "checks": {
-            "dt_halving": dt_check,
-            "end_state": end_state_entries,
-        },
+    A_prot = params["alpha_prot_uU_mL_per_g"] * protein
+    k_prot = params["k_prot_min1"]
+
+    return MealAppearance(A_fast, k_fast, A_slow, k_slow, A_prot, k_prot, dose_fast, dose_slow, dose_total)
+
+
+def _exp_decay(amplitude: float, rate: float, t: float) -> float:
+    if amplitude == 0.0:
+        return 0.0
+    if rate <= 0.0:
+        return amplitude
+    return amplitude * math.exp(-rate * t)
+
+
+def simulate(name: str, params: Dict[str, float], kinetics: MealAppearance) -> SimulationResult:
+    if bindings.lib is None:
+        raise RuntimeError("C backend not loaded")
+    dt = params["dt_min"]
+    t_end = params["t_end_min"]
+    steps = int(round(t_end / dt))
+    times = np.linspace(0.0, t_end, steps + 1)
+
+    glucose = np.zeros_like(times)
+    insulin = np.zeros_like(times)
+    d_fast = np.zeros_like(times)
+    d_slow = np.zeros_like(times)
+    u_series = np.zeros_like(times)
+
+    G = c_double(params["Gb_mg_dL"])
+    X = c_double(0.0)
+    I = c_double(params["Ib_uU_mL"])
+
+    Gb = c_double(params["Gb_mg_dL"])
+    Ib = c_double(params["Ib_uU_mL"])
+    dt_c = c_double(dt)
+
+    for idx, t in enumerate(times):
+        glucose[idx] = G.value
+        insulin[idx] = I.value
+        d_fast[idx] = _exp_decay(kinetics.A_fast, kinetics.k_fast, t)
+        d_slow[idx] = _exp_decay(kinetics.A_slow, kinetics.k_slow, t)
+        u_series[idx] = _exp_decay(kinetics.A_prot, kinetics.k_prot, t)
+        if idx == len(times) - 1:
+            break
+        D0 = d_fast[idx] + d_slow[idx]
+        u0 = u_series[idx]
+        t_half = t + 0.5 * dt_c.value
+        t_full = t + dt_c.value
+        D_half = _exp_decay(kinetics.A_fast, kinetics.k_fast, t_half) + _exp_decay(kinetics.A_slow, kinetics.k_slow, t_half)
+        u_half = _exp_decay(kinetics.A_prot, kinetics.k_prot, t_half)
+        D_full = _exp_decay(kinetics.A_fast, kinetics.k_fast, t_full) + _exp_decay(kinetics.A_slow, kinetics.k_slow, t_full)
+        u_full = _exp_decay(kinetics.A_prot, kinetics.k_prot, t_full)
+        D_eff = (D0 + 4.0 * D_half + D_full) / 6.0
+        u_eff = (u0 + 4.0 * u_half + u_full) / 6.0
+        bindings.lib.step(byref(G), byref(X), byref(I), Gb.value, Ib.value, dt_c.value, D_eff, u_eff)
+
+    return SimulationResult(name=name, times=times, glucose=glucose, insulin=insulin, d_fast=d_fast, d_slow=d_slow, u=u_series)
+
+
+def _clip_series(times: np.ndarray, values: np.ndarray, t_limit: float) -> Tuple[np.ndarray, np.ndarray]:
+    if t_limit >= times[-1]:
+        return times, values
+    idx = int(np.searchsorted(times, t_limit))
+    if math.isclose(times[idx], t_limit, rel_tol=1e-9, abs_tol=1e-9):
+        return times[: idx + 1], values[: idx + 1]
+    t0 = times[idx - 1]
+    t1 = times[idx]
+    v0 = values[idx - 1]
+    v1 = values[idx]
+    frac = (t_limit - t0) / (t1 - t0)
+    v_limit = v0 + frac * (v1 - v0)
+    clipped_times = np.concatenate([times[:idx], np.array([t_limit])])
+    clipped_values = np.concatenate([values[:idx], np.array([v_limit])])
+    return clipped_times, clipped_values
+
+
+def incremental_auc(times: np.ndarray, deltas: np.ndarray, window: float) -> float:
+    clipped_times, clipped_deltas = _clip_series(times, deltas, window)
+    positive = np.maximum(clipped_deltas, 0.0)
+    return float(np.trapezoid(positive, clipped_times))
+
+
+def time_to_baseline(times: np.ndarray, glucose: np.ndarray, baseline: float, tolerance: float = 5.0) -> float:
+    deltas = np.abs(glucose - baseline)
+    peak_idx = int(np.argmax(glucose))
+    for idx in range(peak_idx, len(times)):
+        if deltas[idx] <= tolerance and np.all(deltas[idx:] <= tolerance):
+            return float(times[idx])
+    return math.nan
+
+
+def compute_metrics(result: SimulationResult, params: Dict[str, float]) -> Dict[str, float]:
+    Gb = params["Gb_mg_dL"]
+    delta = result.glucose - Gb
+    peak_idx = int(delta.argmax())
+    peak_delta = float(delta[peak_idx])
+    t_peak = float(result.times[peak_idx])
+    if 0 < peak_idx < len(delta) - 1:
+        dt_left = result.times[peak_idx] - result.times[peak_idx - 1]
+        dt_right = result.times[peak_idx + 1] - result.times[peak_idx]
+        if dt_left > 0 and dt_right > 0 and math.isclose(dt_left, dt_right, rel_tol=1e-9, abs_tol=1e-9):
+            y_prev = delta[peak_idx - 1]
+            y_curr = delta[peak_idx]
+            y_next = delta[peak_idx + 1]
+            denom = y_prev - 2.0 * y_curr + y_next
+            if abs(denom) > 1e-12:
+                offset = 0.5 * (y_prev - y_next) / denom
+                dt_avg = 0.5 * (dt_left + dt_right)
+                t_peak = float(result.times[peak_idx] + offset * dt_avg)
+                peak_delta = float(y_curr - 0.25 * (y_prev - y_next) * offset)
+    iauc_120 = incremental_auc(result.times, delta, 120.0)
+    iauc_240 = incremental_auc(result.times, delta, 240.0)
+    t_baseline = time_to_baseline(result.times, result.glucose, Gb)
+    insulin_peak_idx = int(np.argmax(result.insulin))
+    insulin_peak_time = float(result.times[insulin_peak_idx])
+    return {
+        "peak_delta_G": peak_delta,
+        "t_peak_min": t_peak,
+        "iAUC_0_120": iauc_120,
+        "iAUC_0_240": iauc_240,
+        "time_to_baseline": t_baseline,
+        "insulin_peak_time": insulin_peak_time,
     }
 
-    BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    write_json(SANITY_JSON, report)
-    print(f"Wrote {SANITY_JSON}")
+
+def plot_result(result: SimulationResult, params: Dict[str, float], zoom_end: float, full_end: float, out_root: Path, dpi: int) -> None:
+    figures_root = out_root / "figures"
+    zoom_dir = figures_root / "zoom"
+    full_dir = figures_root / "full"
+    zoom_dir.mkdir(parents=True, exist_ok=True)
+    full_dir.mkdir(parents=True, exist_ok=True)
+
+    def _plot(range_end: float, path: Path) -> None:
+        mask = result.times <= range_end
+        times = result.times[mask]
+        glucose = result.glucose[mask]
+        insulin = result.insulin[mask]
+        D_total = (result.d_fast + result.d_slow)[mask]
+        u_series = result.u[mask]
+
+        fig, (ax_g, ax_i) = plt.subplots(2, 1, sharex=True, figsize=(9, 6))
+        ax_g.plot(times, glucose, label="Glucose (mg/dL)", color="#1f77b4")
+        ax_g.axhline(params["Gb_mg_dL"], linestyle="--", color="#444444", linewidth=1.0, label="Gb")
+        ax_g.set_ylabel("Glucose (mg/dL)")
+        ax_g.legend(loc="upper right")
+
+        ax_i.plot(times, insulin, label="Insulin (μU/mL)", color="#d62728")
+        ax_i.axhline(params["Ib_uU_mL"], linestyle="--", color="#555555", linewidth=1.0, label="Ib")
+        ax_i.set_ylabel("Insulin (μU/mL)")
+        ax_i.set_xlabel("Time (min)")
+        ax_i.legend(loc="upper right")
+
+        ax_i2 = ax_i.twinx()
+        ax_i2.plot(times, D_total, color="#2ca02c", alpha=0.6, label="D(t)")
+        ax_i2.plot(times, u_series, color="#9467bd", alpha=0.6, label="u(t)")
+        ax_i2.set_ylabel("Appearance / stimulus")
+        lines, labels = ax_i.get_legend_handles_labels()
+        lines2, labels2 = ax_i2.get_legend_handles_labels()
+        ax_i.legend(lines + lines2, labels + labels2, loc="upper left")
+
+        fig.suptitle(result.name)
+        fig.tight_layout()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi)
+        plt.close(fig)
+
+    _plot(zoom_end, zoom_dir / f"{result.name}.png")
+    _plot(full_end, full_dir / f"{result.name}.png")
 
 
-def run_sensitivity_analysis(
-    simulator: Simulator,
-    params: Dict[str, float],
-    dt: float,
-    t_end: float,
-    desserts: Dict[str, Dict[str, float | str | None | DoseProfile]],
-    calibrate: bool,
-) -> None:
-    TABLE_DIR.mkdir(parents=True, exist_ok=True)
+def write_summary(rows: Sequence[Tuple[str, Dict[str, float]]], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "dessert",
+        "peak_delta_G_mg_dL",
+        "t_peak_min",
+        "iAUC_0_120_mg_dL_min",
+        "iAUC_0_240_mg_dL_min",
+        "time_to_baseline_min",
+        "insulin_peak_time_min",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for name, metrics in rows:
+            writer.writerow(
+                {
+                    "dessert": name,
+                    "peak_delta_G_mg_dL": f"{metrics['peak_delta_G']:.4f}",
+                    "t_peak_min": f"{metrics['t_peak_min']:.2f}",
+                    "iAUC_0_120_mg_dL_min": f"{metrics['iAUC_0_120']:.2f}",
+                    "iAUC_0_240_mg_dL_min": f"{metrics['iAUC_0_240']:.2f}",
+                    "time_to_baseline_min": "" if math.isnan(metrics["time_to_baseline"]) else f"{metrics['time_to_baseline']:.2f}",
+                    "insulin_peak_time_min": f"{metrics['insulin_peak_time']:.2f}",
+                }
+            )
+
+
+def write_json(path: Path, payload: Dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+
+
+def collect_env_metadata() -> Dict[str, object]:
+    import platform
+
+    build = platform.python_build()
+    return {
+        "python": platform.python_version(),
+        "python_build": " ".join(build),
+        "numpy": np.__version__,
+        "os": platform.platform(),
+    }
+
+
+def run_sensitivity(configs: Sequence[Tuple[str, Dict[str, float]]], params: Dict[str, float], calibrate: bool, out_dir: Path) -> None:
     rows: List[Dict[str, object]] = []
-    for name, specs in sorted(desserts.items()):
-        base_macros = {
-            "carbs_g": float(specs.get("carbs_g") or 0.0),
-            "sugars_g": float(specs.get("sugars_g") or 0.0),
-            "fiber_g": float(specs.get("fiber_g") or 0.0),
-            "fat_g": float(specs.get("fat_g") or 0.0),
-            "protein_g": float(specs.get("protein_g") or 0.0),
-        }
-        for macro in ("fat_g", "fiber_g", "protein_g"):
-            baseline_value = base_macros[macro]
-            for label, factor in (("-20%", 0.8), ("+20%", 1.2)):
-                mutated = dict(base_macros)
-                mutated[macro] = baseline_value * factor
-                profile, extras = nutrition_to_profile(
-                    mutated["carbs_g"],
-                    mutated["sugars_g"],
-                    mutated["fiber_g"],
-                    mutated["fat_g"],
-                    mutated["protein_g"],
-                    nutrition_settings,
-                )
-                if calibrate:
-                    result, converged = calibrate_profile(
-                        simulator, params, dt, t_end, profile
-                    )
-                    mode = "calibrated"
-                else:
-                    result = simulator.run(params, dt, t_end, profile)
-                    converged = False
-                    mode = "dose-driven"
+    perturbations = {"fat_g": "fat", "fiber_g": "fiber", "protein_g": "protein"}
+    for name, dessert in configs:
+        for key, label in perturbations.items():
+            base_value = float(dessert.get(key, 0.0))
+            for factor in (0.8, 1.2):
+                modified = dict(dessert)
+                modified[key] = max(0.0, base_value * factor)
+                kinetics = compute_meal_appearance(modified, params, calibrate)
+                result = simulate(name, params, kinetics)
                 metrics = compute_metrics(result, params)
                 rows.append(
                     {
-                        "name": name,
-                        "mode": mode,
-                        "macro": macro,
-                        "delta": label,
+                        "dessert": name,
+                        "nutrient": label,
                         "factor": factor,
-                        "input_source": "sensitivity",
-                        "Gb_mg_dL": params["Gb_mg_dL"],
-                        "Ib_uU_mL": params["Ib_uU_mL"],
-                        "carbs_g": mutated["carbs_g"],
-                        "sugars_g": mutated["sugars_g"],
-                        "fiber_g": mutated["fiber_g"],
-                        "fat_g": mutated["fat_g"],
-                        "protein_g": mutated["protein_g"],
-                        "dose_mgdL": extras["dose_mgdL"],
-                        "f_fast": extras["f_fast"],
-                        "f_app": extras["f_app"],
-                        "k_mod": extras["k_mod"],
-                        "kfast": extras["kfast"],
-                        "kslow": extras["kslow"],
-                        "Afast": profile.Afast,
-                        "Aslow": profile.Aslow,
-                        "Aprot": profile.Aprot,
-                        "kprot": profile.kprot,
-                        "peak_G": metrics["peak_G"],
-                        "peak_delta": metrics["peak_delta"],
-                        "t_peak_G": metrics["t_peak_G"],
-                        "nadir_G_0_240": metrics["nadir_G_0_240"],
-                        "baseline_return_min": metrics["baseline_return_min"],
-                        "iAUC_0_120": metrics["iAUC_0_120"],
-                        "iAUC_0_240": metrics["iAUC_0_240"],
-                        "AUCG_0_240": metrics["AUCG_0_240"],
-                        "peak_I": metrics["peak_I"],
-                        "t_peak_I": metrics["t_peak_I"],
-                        "AUCI_0_240": metrics["AUCI_0_240"],
-                        "calibration_converged": converged if calibrate else None,
+                        "peak_delta_G_mg_dL": metrics["peak_delta_G"],
+                        "t_peak_min": metrics["t_peak_min"],
+                        "iAUC_0_240_mg_dL_min": metrics["iAUC_0_240"],
                     }
                 )
-    path = TABLE_DIR / "sensitivity.csv"
-    fieldnames: List[str] = []
-    for row in rows:
-        for key in row.keys():
-            if key not in fieldnames:
-                fieldnames.append(key)
+    path = out_dir / "tables" / "sensitivity.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ["dessert", "nutrient", "factor", "peak_delta_G_mg_dL", "t_peak_min", "iAUC_0_240_mg_dL_min"]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
-    print(f"Wrote {path}")
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+def load_frozen_configs() -> List[Tuple[str, Dict[str, float]]]:
+    configs: List[Tuple[str, Dict[str, float]]] = []
+    for yaml_path in sorted(FROZEN_DIR.glob("*.yaml")):
+        with yaml_path.open("r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle) or {}
+        if not isinstance(payload, dict):
+            raise ValueError(f"Frozen config {yaml_path} must be a mapping")
+        name = str(payload.get("name", yaml_path.stem))
+        configs.append((name, payload))
+    return configs
+
+
+def clean_outputs(base: Path) -> None:
+    for rel in ("build", "figures", "tables"):
+        target = base / rel
+        if target.exists():
+            for path in sorted(target.glob("**/*"), reverse=True):
+                if path.is_file() or path.is_symlink():
+                    path.unlink(missing_ok=True)
+            for path in sorted(target.glob("**/*"), reverse=True):
+                if path.is_dir():
+                    try:
+                        path.rmdir()
+                    except OSError:
+                        pass
+            if target.exists():
+                try:
+                    target.rmdir()
+                except OSError:
+                    pass
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Dessert glycemia simulator")
-    parser.add_argument(
-        "--reproduce",
-        action="store_true",
-        help="Clean, rebuild, and run all frozen YAML configs",
-    )
-    parser.add_argument(
-        "--calibrate",
-        action="store_true",
-        help="Equalize glucose peaks by rescaling appearance amplitudes",
-    )
-    parser.add_argument(
-        "--sensitivity",
-        action="store_true",
-        help="Run ±20% fat/fiber/protein sensitivity analysis",
-    )
-    parser.add_argument("--window", type=int, help="Override plot window (minutes)")
-    parser.add_argument("--dpi", type=int, default=150, help="Override plot DPI (default 150)")
-    parser.add_argument("--no-plots", action="store_true", help="Skip plotting outputs")
-    parser.add_argument(
-        "--summary-only",
-        action="store_true",
-        help="Only generate tables (implies --no-plots)",
-    )
-    return parser.parse_args(argv)
+    parser.add_argument("--reproduce", action="store_true", help="Clean, build, and run frozen configs")
+    parser.add_argument("--calibrate", action="store_true", help="Equalize fast/slow appearance amplitudes")
+    parser.add_argument("--sensitivity", action="store_true", help="Run ±20% nutrient perturbations")
+    parser.add_argument("--window", choices=["0-120", "0-240", "0-1440"], default="0-240", help="Zoom window for plots")
+    parser.add_argument("--no-plots", action="store_true", help="Skip figure generation")
+    parser.add_argument("--summary-only", action="store_true", help="Only write summary table")
+    parser.add_argument("--dpi", type=int, default=150, help="Figure DPI")
+    parser.add_argument("--outdir", type=Path, default=None, help="Output directory (defaults to repository root)")
+    args = parser.parse_args(argv)
 
-
-def main(argv: Sequence[str] | None = None) -> None:
-    args = parse_args(argv)
-
-    if args.summary_only:
-        args.no_plots = True
-    calibrate = args.calibrate
-    if args.reproduce and calibrate:
-        print("Reproduction mode enforces dose-driven simulations; ignoring --calibrate.")
-        calibrate = False
-
-    params = load_config(CONFIG_PATH)
-    dt = params.pop("dt")
-    t_end = params.pop("t_end")
-    plot_window_min = float(params.pop("plot_window_min", DEFAULT_PLOT_WINDOW))
-    plot_zoom_dir_raw = params.pop("plot_zoom_dir", "figures/zoom")
-    plot_full_dir_raw = params.pop("plot_full_dir", "figures/full")
-    if args.window is not None:
-        plot_window_min = float(args.window)
-    plot_window_min = max(1.0, plot_window_min)
-
-    plot_zoom_dir = Path(plot_zoom_dir_raw)
-    if not plot_zoom_dir.is_absolute():
-        plot_zoom_dir = ROOT / plot_zoom_dir
-    plot_full_dir = Path(plot_full_dir_raw)
-    if not plot_full_dir.is_absolute():
-        plot_full_dir = ROOT / plot_full_dir
-
-    dpi = max(1, args.dpi)
+    outdir = Path(args.outdir).resolve() if args.outdir else ROOT
 
     if args.reproduce:
-        clean_outputs()
-        try:
-            build_backend()
-        except RuntimeError as exc:
-            raise SystemExit(str(exc)) from exc
-        input_source = "frozen"
-        desserts = load_frozen_catalog(ROOT / "configs" / "frozen")
-    else:
-        try:
-            ensure_backend()
-        except RuntimeError as exc:
-            raise SystemExit(str(exc)) from exc
-        input_source = "yaml"
-        desserts = load_dessert_catalog(DESSERTS_CONFIG_PATH)
+        clean_outputs(outdir)
 
-    save_env()
+    params = load_params_yaml(DEFAULT_PARAMS_PATH)
+    set_params_from_dict(params)
 
-    simulator = Simulator()
-    emit_plots = not args.no_plots and not args.summary_only
+    configs = load_frozen_configs()
 
-    pipeline_runs = run_pipeline(
-        simulator,
-        params,
-        dt,
-        t_end,
-        plot_window_min,
-        plot_zoom_dir,
-        plot_full_dir,
-        dpi,
-        desserts,
-        calibrate=calibrate,
-        input_source=input_source,
-        emit_plots=emit_plots,
-        summary_only=args.summary_only,
-    )
-    run_sanity(simulator, params, dt, t_end, desserts, pipeline_runs, calibrate)
+    zoom_choice = args.window
+    zoom_end = float(zoom_choice.split("-")[1])
+    full_end = 1440.0
+
+    generate_plots = not (args.no_plots or args.summary_only)
+
+    summary_rows: List[Tuple[str, Dict[str, float]]] = []
+
+    for name, dessert in configs:
+        kinetics = compute_meal_appearance(dessert, params, args.calibrate)
+        result = simulate(name, params, kinetics)
+        metrics = compute_metrics(result, params)
+        summary_rows.append((name, metrics))
+        if generate_plots:
+            plot_result(result, params, zoom_end=zoom_end, full_end=full_end, out_root=outdir, dpi=args.dpi)
+
+    summary_path = outdir / "tables" / "summary.csv"
+    write_summary(summary_rows, summary_path)
+
+    env_meta = collect_env_metadata()
+    write_json(outdir / "build" / "env.json", env_meta)
+    write_json(outdir / "build" / "build.json", get_build_metadata())
 
     if args.sensitivity:
-        run_sensitivity_analysis(simulator, params, dt, t_end, desserts, calibrate)
+        run_sensitivity(configs, params, args.calibrate, outdir)
+
+    return 0
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    raise SystemExit(main())
