@@ -266,10 +266,26 @@ def save_env() -> None:
 
 
 def clean_outputs() -> None:
+    import stat
+
+    def _handle_remove_readonly(func, path, exc_info):
+        # On Windows, files can be read-only; clear the bit and retry.
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except Exception:
+            # As a last resort, ignore and continue cleanup.
+            pass
+
     for path in (FIG_DIR, TABLE_DIR, BUILD_DIR):
-        if path.exists():
-            shutil.rmtree(path)
+        if not path.exists():
+            continue
+        try:
+            shutil.rmtree(path, onerror=_handle_remove_readonly)
             print(f"Removed {path}")
+        except PermissionError as exc:
+            # Best-effort cleanup: leave a note and continue.
+            print(f"Warning: could not fully remove {path}: {exc}")
 
 DEFAULT_PLOT_WINDOW = 240.0
 
