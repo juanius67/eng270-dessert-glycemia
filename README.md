@@ -1,5 +1,27 @@
 # ENG-270 — Dessert Glycemia Simulator
+### Windows build notes (gcc)
+To compile the C backend on Windows, install MSYS2 and add gcc to PATH:
 
+1. Install MSYS2: https://www.msys2.org/
+2. Open “MSYS2 MSYS” and run:
+```
+
+pacman -S --needed base-devel mingw-w64-x86_64-toolchain
+
+```
+3. Add `C:\msys64\mingw64\bin` to your **User PATH** (System Properties → Environment Variables).
+4. Open a new terminal and verify:
+```
+
+gcc --version
+
+```
+Now `python run.py --reproduce` will be able to compile `src/model.c`.
+```
+
+(If you prefer Chocolatey/MinGW, a one-liner works too:
+`choco install mingw` then add `C:\ProgramData\chocolatey\bin` to PATH.)
+--------------------------------
 Quick start (reproducible build)
 --------------------------------
 ```bash
