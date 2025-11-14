@@ -6,10 +6,9 @@ import argparse
 import csv
 import json
 import math
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 import yaml
@@ -28,6 +27,26 @@ ROOT = Path(__file__).resolve().parent
 CONFIGS_DIR = ROOT / "configs"
 FROZEN_DIR = CONFIGS_DIR / "frozen"
 DEFAULT_PARAMS_PATH = CONFIGS_DIR / "params.yaml"
+
+EXPECTED_PARAM_KEYS = {
+    "Gb_mg_dL",
+    "Ib_uU_mL",
+    "S_G_min1",
+    "p2_min1",
+    "p3_min1_per_uU_mL",
+    "n_min1",
+    "Vd_dL",
+    "f_hep",
+    "f_app0",
+    "beta_fiber_per10g",
+    "beta_fat_per10g",
+    "k_fast0_min1",
+    "k_slow0_min1",
+    "alpha_prot_uU_mL_per_g",
+    "k_prot_min1",
+    "dt_min",
+    "t_end_min",
+}
 
 
 @dataclass
@@ -55,55 +74,23 @@ class SimulationResult:
 
 
 def load_params_yaml(path: Path = DEFAULT_PARAMS_PATH) -> Dict[str, float]:
-    required_keys = {
-        "Gb_mg_dL",
-        "Ib_uU_mL",
-        "S_G_min1",
-        "p2_min1",
-        "p3_min1_per_uU_mL",
-        "n_min1",
-        "Vd_dL",
-        "f_hep",
-        "f_app0",
-        "beta_fiber_per10g",
-        "beta_fat_per10g",
-        "k_fast0_min1",
-        "k_slow0_min1",
-        "alpha_prot_uU_mL_per_g",
-        "k_prot_min1",
-        "dt_min",
-        "t_end_min",
-    }
     with Path(path).open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     if not isinstance(data, dict):
         raise ValueError("params.yaml must contain a mapping")
 
-    legacy_map = {"p1": "S_G_min1", "p2": "p2_min1", "p3": "p3_min1_per_uU_mL", "p4": "n_min1"}
-    used_legacy = False
-    for legacy_key, new_key in legacy_map.items():
-        if legacy_key in data and new_key not in data:
-            data[new_key] = data[legacy_key]
-            used_legacy = True
-    if used_legacy:
-        warnings.warn("Mapped legacy p1..p4 keys to unit-encoded names", RuntimeWarning, stacklevel=2)
-    if "Gb_mg_dL" not in data:
-        data["Gb_mg_dL"] = 90.0
-    if "Ib_uU_mL" not in data:
-        data["Ib_uU_mL"] = 7.0
-
-    missing = sorted(required_keys - data.keys())
+    missing = sorted(EXPECTED_PARAM_KEYS - data.keys())
     if missing:
-        raise KeyError(f"Missing parameters: {', '.join(missing)}")
+        raise ValueError(f"Missing parameters in {path}: {', '.join(missing)}")
 
-    return {key: float(data[key]) for key in required_keys}
+    return {key: float(data[key]) for key in EXPECTED_PARAM_KEYS}
 
 
 def _clip(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
-def compute_meal_appearance(dessert: Dict[str, float], params: Dict[str, float], calibrate: bool) -> MealAppearance:
+def map_meal_from_label(dessert: Dict[str, float], params: Dict[str, float]) -> Dict[str, float]:
     carbs = float(dessert.get("carbs_g", 0.0))
     sugars = float(dessert.get("sugars_g", 0.0))
     fiber = float(dessert.get("fiber_g", 0.0))
@@ -111,31 +98,75 @@ def compute_meal_appearance(dessert: Dict[str, float], params: Dict[str, float],
     protein = float(dessert.get("protein_g", 0.0))
 
     C_avail = max(0.0, carbs - 0.5 * fiber)
-    carbs_safe = carbs if carbs > 1e-9 else 1e-9
-    f_fast = _clip(sugars / carbs_safe, 0.0, 1.0)
-    f_app0 = params["f_app0"]
-    beta_fiber = params["beta_fiber_per10g"] * fiber / 10.0
-    f_app = _clip(f_app0 * (1.0 - beta_fiber), 0.05, 0.60)
-    k_mod = 1.0 / (1.0 + params["beta_fat_per10g"] * fat / 10.0 + params["beta_fiber_per10g"] * fiber / 10.0)
+    f_fast = sugars / max(carbs, 1e-9)
+    f_app = params["f_app0"] * (1.0 - params["beta_fiber_per10g"] * (fiber / 10.0))
+    f_app = _clip(f_app, 0.05, 0.60)
+    k_mod = 1.0 / (
+        1.0
+        + params["beta_fat_per10g"] * (fat / 10.0)
+        + params["beta_fiber_per10g"] * (fiber / 10.0)
+    )
     k_fast = params["k_fast0_min1"] * k_mod
     k_slow = params["k_slow0_min1"] * k_mod
 
-    Vd = params["Vd_dL"]
-    f_hep = params["f_hep"]
-    dose_total = (1000.0 * C_avail / Vd) * f_app * (1.0 - f_hep)
-
-    dose_fast = f_fast * dose_total
-    dose_slow = (1.0 - f_fast) * dose_total
-    if calibrate and dose_total > 0:
-        dose_fast = dose_slow = 0.5 * dose_total
+    dose_tot = (1000.0 * C_avail / params["Vd_dL"]) * f_app * (1.0 - params["f_hep"])
+    dose_fast = f_fast * dose_tot
+    dose_slow = (1.0 - f_fast) * dose_tot
 
     A_fast = k_fast * dose_fast
     A_slow = k_slow * dose_slow
-
     A_prot = params["alpha_prot_uU_mL_per_g"] * protein
-    k_prot = params["k_prot_min1"]
 
-    return MealAppearance(A_fast, k_fast, A_slow, k_slow, A_prot, k_prot, dose_fast, dose_slow, dose_total)
+    return {
+        "A_fast": A_fast,
+        "k_fast": k_fast,
+        "A_slow": A_slow,
+        "k_slow": k_slow,
+        "A_prot": A_prot,
+        "k_prot": params["k_prot_min1"],
+    }
+
+
+def _meal_from_mapping(mapping: Dict[str, float]) -> MealAppearance:
+    k_fast = float(mapping["k_fast"])
+    k_slow = float(mapping["k_slow"])
+    A_fast = float(mapping["A_fast"])
+    A_slow = float(mapping["A_slow"])
+    dose_fast = A_fast / k_fast if k_fast > 0 else 0.0
+    dose_slow = A_slow / k_slow if k_slow > 0 else 0.0
+    dose_total = dose_fast + dose_slow
+    return MealAppearance(
+        A_fast=A_fast,
+        k_fast=k_fast,
+        A_slow=A_slow,
+        k_slow=k_slow,
+        A_prot=float(mapping["A_prot"]),
+        k_prot=float(mapping["k_prot"]),
+        dose_fast=dose_fast,
+        dose_slow=dose_slow,
+        dose_total=dose_total,
+    )
+
+
+def build_meal_appearance(dessert: Dict[str, float], params: Dict[str, float], calibrate: bool) -> MealAppearance:
+    mapping = map_meal_from_label(dessert, params)
+    meal = _meal_from_mapping(mapping)
+    if calibrate and meal.dose_total > 0.0:
+        half = 0.5 * meal.dose_total
+        A_fast = meal.k_fast * half
+        A_slow = meal.k_slow * half
+        meal = MealAppearance(
+            A_fast=A_fast,
+            k_fast=meal.k_fast,
+            A_slow=A_slow,
+            k_slow=meal.k_slow,
+            A_prot=meal.A_prot,
+            k_prot=meal.k_prot,
+            dose_fast=half,
+            dose_slow=half,
+            dose_total=meal.dose_total,
+        )
+    return meal
 
 
 def _prepare_params(params: Dict[str, float], *, dt_min: float | None = None, t_end_min: float | None = None) -> Dict[str, float]:
@@ -173,7 +204,7 @@ def simulate_peak_deltaG(params: Dict[str, float], dessert_yaml_path: Path, dt_m
     local_params = _prepare_params(params, dt_min=dt_min)
     set_params_from_dict(local_params)
     calibrate = False
-    kinetics = compute_meal_appearance(dessert, local_params, calibrate)
+    kinetics = build_meal_appearance(dessert, local_params, calibrate)
     name = str(dessert.get("name", Path(dessert_yaml_path).stem))
     result = simulate(name, local_params, kinetics)
     delta = result.glucose - local_params["Gb_mg_dL"]
@@ -399,7 +430,7 @@ def run_sensitivity(configs: Sequence[Tuple[str, Dict[str, float]]], params: Dic
             for factor in (0.8, 1.2):
                 modified = dict(dessert)
                 modified[key] = max(0.0, base_value * factor)
-                kinetics = compute_meal_appearance(modified, params, calibrate)
+                kinetics = build_meal_appearance(modified, params, calibrate)
                 result = simulate(name, params, kinetics)
                 metrics = compute_metrics(result, params)
                 rows.append(
@@ -485,7 +516,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     summary_rows: List[Tuple[str, Dict[str, float]]] = []
 
     for name, dessert in configs:
-        kinetics = compute_meal_appearance(dessert, params, args.calibrate)
+        kinetics = build_meal_appearance(dessert, params, args.calibrate)
         result = simulate(name, params, kinetics)
         metrics = compute_metrics(result, params)
         summary_rows.append((name, metrics))

@@ -2,12 +2,12 @@
 
 #include <math.h>
 
-static double S_G_ = 0.025;
-static double p2_  = 0.025;
-static double p3_  = 1.3e-3;
-static double n_   = 0.14;
-static double Gb_  = 90.0;
-static double Ib_  = 7.0;
+static double S_G_ = 0.0;
+static double p2_  = 0.0;
+static double p3_  = 0.0;
+static double n_   = 0.0;
+static double Gb_  = 0.0;
+static double Ib_  = 0.0;
 
 EXPORT void set_params(BergmanParams p) {
     S_G_ = p.S_G;

@@ -22,15 +22,13 @@ Now `python run.py --reproduce` will be able to compile `src/model.c`.
 (If you prefer Chocolatey/MinGW, a one-liner works too:
 `choco install mingw` then add `C:\ProgramData\chocolatey\bin` to PATH.)
 --------------------------------
-Quick start (reproducible build)
+Quick start / Grader walkthrough
 --------------------------------
-```bash
-pip install -r requirements.txt
-python run.py --reproduce          # compiles C if needed; runs all configs/frozen/*.yaml; writes figures, tables, build/*
-python run.py --calibrate          # optional equal-peak calibration (rescales amplitudes only)
-python run.py --sensitivity        # ±20% fat/fiber/protein → tables/sensitivity.csv
-python -m pytest -q                # numerical sanity tests
-````
+1. `pip install -r requirements.txt`
+2. `python run.py --reproduce` – compiles `src/model.c` if needed and regenerates figures, tables, and build metadata from `configs/frozen/*.yaml`.
+3. `python run.py --calibrate` – replays frozen desserts with equal fast/slow amplitudes while keeping decay rates fixed.
+4. `python run.py --sensitivity` – writes `tables/sensitivity.csv` after ±20% fat/fiber/protein sweeps.
+5. `python -m pytest -q` – validates steady state and dt-halving convergence with the shared RK4 integrator.
 
 **Inputs.** The pipeline reads *only* frozen per-dessert YAML files in `configs/frozen/` at grading time. Each file stores per-portion: `carbs_g, sugars_g, fiber_g, fat_g, protein_g, portion_g`. These are mapped to a dual-pool appearance
 (D(t) = A_\text{fast} e^{-k_\text{fast} t} + A_\text{slow} e^{-k_\text{slow} t}) with fat/fiber modifiers, and a protein-driven insulin pulse (u(t)).
@@ -68,29 +66,9 @@ Git ignores `build/`, `figures/`, `tables/`, compiled libraries, and cache direc
 
 ## Parameters and inputs
 
-`configs/params.yaml` stores the defaults used by the simulator. Keys encode units explicitly and match the specification:
+`configs/params.yaml` stores the defaults used by the simulator. Keys encode units explicitly and match the specification above.
 
-* `Gb_mg_dL: 90`
-* `Ib_uU_mL: 7`
-* `S_G_min1: 0.025`
-* `p2_min1: 0.025`
-* `p3_min1_per_uU_mL: 1.3e-3`
-* `n_min1: 0.14`
-* `Vd_dL: 110`
-* `f_hep: 0.25`
-* `f_app0: 0.30`
-* `beta_fiber_per10g: 0.05`
-* `beta_fat_per10g: 0.06`
-* `k_fast0_min1: 0.35`
-* `k_slow0_min1: 0.07`
-* `alpha_prot_uU_mL_per_g: 0.06`
-* `k_prot_min1: 0.05`
-* `dt_min: 0.5`
-* `t_end_min: 1440`
-
-Legacy `p1`–`p4` keys are mapped to the new names with a warning for backward compatibility.
-
-Each dessert YAML provides per-portion macros only—no hard-coded `(A, k)` pairs remain. A minimal example (stored in `configs/frozen/`):
+Each dessert YAML provides per-portion macros only. A minimal example (stored in `configs/frozen/`):
 
 ```yaml
 name: sample_donut
