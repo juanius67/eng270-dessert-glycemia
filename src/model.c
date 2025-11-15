@@ -1,3 +1,4 @@
+/* RK4 integrator for the Bergman minimal model, bridged via ctypes. */
 #include "model.h"
 
 #include <math.h>
