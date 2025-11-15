@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single CLI entry-point for nutrition-driven Bergman minimal model runs."""
+"""Single CLI entry-point mapping nutrition labels to the C RK4 minimal model."""
 from __future__ import annotations
 
 import argparse
@@ -148,24 +148,42 @@ def _meal_from_mapping(mapping: Dict[str, float]) -> MealAppearance:
     )
 
 
+def _equalize_amplitudes(meal: MealAppearance) -> MealAppearance:
+    """Return a copy with equal amplitudes while preserving dose.
+
+    Uses A_eq = dose_total / (1/k_fast + 1/k_slow) when both rates are
+    positive and the total dose is finite.
+    """
+
+    if meal.dose_total <= 0.0 or meal.k_fast <= 0.0 or meal.k_slow <= 0.0:
+        return meal
+
+    inv_sum = (1.0 / meal.k_fast) + (1.0 / meal.k_slow)
+    if inv_sum <= 0.0:
+        return meal
+
+    A_eq = meal.dose_total / inv_sum
+    dose_fast = A_eq / meal.k_fast
+    dose_slow = A_eq / meal.k_slow
+
+    return MealAppearance(
+        A_fast=A_eq,
+        k_fast=meal.k_fast,
+        A_slow=A_eq,
+        k_slow=meal.k_slow,
+        A_prot=meal.A_prot,
+        k_prot=meal.k_prot,
+        dose_fast=dose_fast,
+        dose_slow=dose_slow,
+        dose_total=meal.dose_total,
+    )
+
+
 def build_meal_appearance(dessert: Dict[str, float], params: Dict[str, float], calibrate: bool) -> MealAppearance:
     mapping = map_meal_from_label(dessert, params)
     meal = _meal_from_mapping(mapping)
-    if calibrate and meal.dose_total > 0.0:
-        half = 0.5 * meal.dose_total
-        A_fast = meal.k_fast * half
-        A_slow = meal.k_slow * half
-        meal = MealAppearance(
-            A_fast=A_fast,
-            k_fast=meal.k_fast,
-            A_slow=A_slow,
-            k_slow=meal.k_slow,
-            A_prot=meal.A_prot,
-            k_prot=meal.k_prot,
-            dose_fast=half,
-            dose_slow=half,
-            dose_total=meal.dose_total,
-        )
+    if calibrate:
+        meal = _equalize_amplitudes(meal)
     return meal
 
 
@@ -488,7 +506,11 @@ def clean_outputs(base: Path) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Dessert glycemia simulator")
     parser.add_argument("--reproduce", action="store_true", help="Clean, build, and run frozen configs")
-    parser.add_argument("--calibrate", action="store_true", help="Equalize fast/slow appearance amplitudes")
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Equalize fast/slow amplitudes at t=0 while preserving total dose",
+    )
     parser.add_argument("--sensitivity", action="store_true", help="Run ±20% nutrient perturbations")
     parser.add_argument("--window", choices=["0-120", "0-240", "0-1440"], default="0-240", help="Zoom window for plots")
     parser.add_argument("--no-plots", action="store_true", help="Skip figure generation")

@@ -1,4 +1,13 @@
 # ENG-270 — Dessert Glycemia Simulator
+
+Nutrition-label driven simulator built for ENG-270. A single Python CLI maps dessert macros to a dual-exponential gut appearance model and calls a C RK4 implementation of the Bergman minimal model via `ctypes`.
+
+## Dependencies
+
+- Python 3.11+ (tested on 3.11 and 3.12)
+- Python packages pinned in `requirements.txt` (`pip install -r requirements.txt`)
+- A C compiler (gcc/clang); the build is triggered automatically on first run
+
 ### Windows build notes (gcc)
 To compile the C backend on Windows, install MSYS2 and add gcc to PATH:
 
@@ -25,18 +34,16 @@ Now `python run.py --reproduce` will be able to compile `src/model.c`.
 Quick start / Grader walkthrough
 --------------------------------
 1. `pip install -r requirements.txt`
-2. `python run.py --reproduce` – compiles `src/model.c` if needed and regenerates figures, tables, and build metadata from `configs/frozen/*.yaml`.
-3. `python run.py --calibrate` – replays frozen desserts with equal fast/slow amplitudes while keeping decay rates fixed.
+2. `python run.py --reproduce` – compiles `src/model.c` if needed and regenerates figures, tables, and build metadata from `configs/frozen/*.yaml` (full pipeline for report figures/tables).
+3. `python run.py --calibrate` – replays frozen desserts with equal fast/slow amplitudes at t=0 while keeping decay rates fixed and preserving the total appearance dose.
 4. `python run.py --sensitivity` – writes `tables/sensitivity.csv` after ±20% fat/fiber/protein sweeps.
 5. `python -m pytest -q` – validates steady state and dt-halving convergence with the shared RK4 integrator.
 
-**Inputs.** The pipeline reads *only* frozen per-dessert YAML files in `configs/frozen/` at grading time. Each file stores per-portion: `carbs_g, sugars_g, fiber_g, fat_g, protein_g, portion_g`. These are mapped to a dual-pool appearance
-(D(t) = A_\text{fast} e^{-k_\text{fast} t} + A_\text{slow} e^{-k_\text{slow} t}) with fat/fiber modifiers, and a protein-driven insulin pulse (u(t)).
+**Inputs.** The pipeline reads *only* frozen per-dessert YAML files in `configs/frozen/` at grading time. Each file stores per-portion: `carbs_g, sugars_g, fiber_g, fat_g, protein_g, portion_g`. These are mapped to a dual-pool appearance (D(t) = A_\text{fast} e^{-k_\text{fast} t} + A_\text{slow} e^{-k_\text{slow} t}) with fat/fiber modifiers, and a protein-driven insulin pulse (u(t)).
 
-**Parameters.** Model constants live in `configs/params.yaml` with unit-encoded keys:
-`Gb_mg_dL, Ib_uU_mL, S_G_min1, p2_min1, p3_min1_per_uU_mL, n_min1, Vd_dL, f_hep, f_app0, beta_fiber_per10g, beta_fat_per10g, k_fast0_min1, k_slow0_min1, alpha_prot_uU_mL_per_g, k_prot_min1, dt_min, t_end_min`.
+**Parameters.** Model constants live in `configs/params.yaml` with unit-encoded keys: `Gb_mg_dL, Ib_uU_mL, S_G_min1, p2_min1, p3_min1_per_uU_mL, n_min1, Vd_dL, f_hep, f_app0, beta_fiber_per10g, beta_fat_per10g, k_fast0_min1, k_slow0_min1, alpha_prot_uU_mL_per_g, k_prot_min1, dt_min, t_end_min`.
 
-Nutrition labels in YAML drive a dual-exponential gut appearance model that feeds the Bergman minimal model. A C RK4 core (exposed via `ctypes`) updates glucose, insulin, and remote insulin effect for a nominal, non-diabetic adult. The command-line interface in `run.py` is the only entry point and produces figures, tables, and build metadata.
+Nutrition labels in YAML drive a dual-exponential gut appearance model that feeds the Bergman minimal model. A C RK4 core (exposed via `ctypes`) updates glucose, insulin, and remote insulin effect for a nominal, non-diabetic adult. The command-line interface in `run.py` is the only entry point and produces figures, tables, and build metadata. Running `python run.py --reproduce --summary-only --no-plots` is a quick headless check that still refreshes tables and build metadata.
 
 `--reproduce` wipes prior artifacts, rebuilds the C core if necessary, and replays every frozen YAML under `configs/frozen/`. Outputs are written to:
 
@@ -46,7 +53,7 @@ Nutrition labels in YAML drive a dual-exponential gut appearance model that feed
 * `build/env.json` (Python, NumPy, OS)
 * `build/build.json` (compiler command and SHA256 of `src/model.c`)
 
-`--calibrate` equalises the fast and slow appearance amplitudes (keeping decay rates fixed). `--sensitivity` performs ±20 % sweeps of fat, fiber, and protein and writes `tables/sensitivity.csv`.
+`--calibrate` equalises the fast and slow appearance amplitudes at t=0 (keeping decay rates fixed and preserving total appearance dose). `--sensitivity` performs ±20 % sweeps of fat, fiber, and protein and writes `tables/sensitivity.csv`.
 
 ## Repository layout
 
@@ -82,6 +89,10 @@ portion_g: 85.0
 
 During a run, carbohydrates determine the total appearance dose after hepatic extraction (`f_hep`). Sugars route to the fast pool, the remainder to the slow pool. Fat and fiber adjust the appearance fractions and decay rates; protein induces an exponential insulin stimulus.
 
+## Model and references
+
+The simulator instantiates the Bergman minimal model with parameters tuned for a nominal adult. Repository structure and reporting workflow follow the SIE ENG-270 project template (stakahama/sie-eng270-project-template).
+
 ## CLI usage
 
 ```
@@ -91,7 +102,7 @@ python run.py [--reproduce] [--calibrate] [--sensitivity]
 ```
 
 * `--reproduce` – clean outputs and rerun frozen desserts only.
-* `--calibrate` – set equal fast/slow amplitudes while keeping decay rates.
+* `--calibrate` – set equal fast/slow amplitudes at t=0 while keeping decay rates and total dose.
 * `--sensitivity` – write `tables/sensitivity.csv` after ±20 % fat/fiber/protein sweeps.
 * `--window` – adjust the zoom-plot window (default `0-240`).
 * `--dpi` – change figure resolution (default `150`).
