@@ -26,15 +26,15 @@ D(t) = A_{\text{fast}} e^{-k_{\text{fast}} t} + A_{\text{slow}} e^{-k_{\text{slo
 
 ### Input files (“data”)
 
-All user-supplied inputs live under `configs/`:
+ALL user-supplied inputs live under `configs/`; this section describes are what they mean and how the project uses them :
 
 - `configs/params.yaml`  
-  Global physiological and appearance parameters with unit-encoded keys:
+  Global physiological and appearance parameters with unit-encoded (i.e. the names of the parameters explicitly include their units of measurement) keys, these were taken from the literature :
 
   `Gb_mg_dL, Ib_uU_mL, S_G_min1, p2_min1, p3_min1_per_uU_mL, n_min1, Vd_dL, f_hep, f_app0, beta_fiber_per10g, beta_fat_per10g, k_fast0_min1, k_slow0_min1, alpha_prot_uU_mL_per_g, k_prot_min1, dt_min, t_end_min`.
 
 - `configs/frozen/*.yaml`  
-  One YAML file **per dessert**, each storing per-portion macros only:
+  One YAML file **per dessert**, each storing **per-portion** macros only. Below is an example for how a simple donut would be encoded :
 
   ```yaml
   name: sample_donut
@@ -46,22 +46,22 @@ All user-supplied inputs live under `configs/`:
   portion_g: 85.0
 ``
 
-These files are treated as **frozen inputs for grading**. The “client” can add new desserts by copying an existing file, adjusting the macros, and re-running the pipeline.
+These YAML files are treated as **frozen inputs for grading**. The “client” can add new desserts by copying an existing file, adjusting the macros and name, and re-running the pipeline.
 
-No binary data, spreadsheets, or hard-coded `(A, k)` pairs are required; everything is derived from labels and `params.yaml`.
+**Everything** is derived from labels and `params.yaml`.
 
 ### Output files (“results”)
 
-Running the pipeline populates a small, predictable set of output directories (all ignored by git):
+Running the pipeline fills the set of output directories below (all ignored by git so as to not upload junk) :
 
 * `figures/zoom/`
-  Time window 0–240 min: overlays of glucose, insulin, and gut appearance for each dessert.
+  All figures with a time window of 0–240 min : overlays of glucose, insulin, and gut appearance for each dessert.
 
 * `figures/full/`
-  Full-day (0–1440 min) overlays, used for long-horizon comparisons.
+  All figures with full-day (0–1440 min) overlays, used for long-time-horizon comparisons.
 
 * `tables/summary.csv`
-  One row per dessert with key metrics, e.g.:
+  CSV tables with one row per dessert with key metrics, for example :
 
   * `peak_delta_G` (mg/dL above baseline)
   * `t_peak_min` (time of peak glucose)
@@ -69,15 +69,16 @@ Running the pipeline populates a small, predictable set of output directories (a
   * return-to-baseline indicators
 
 * `tables/sensitivity.csv`
-  Written by `--sensitivity`: ±20 % perturbations of fat, fibre, and protein per dessert with resulting peaks/timings/iAUCs.
+  Written by `--sensitivity` (this command will be described later) : A table with ±20 % perturbations of fat, fibre, and protein per dessert with resulting peaks/timings/iAUCs. This is essentially a *stress test* of the model, made to test if the simulator’s predictions remain meaningful even when inputs vary, highlighting which nutrients most strongly impact glycemia.
+
 
 * `build/env.json`
-  Environment metadata: Python version, NumPy version, OS, etc.
+  Here lies the environment metadata : Python version, NumPy version, OS, etc. Moreso used for bookkeeping than anything else; having this ensures that anyone reproducing results knows exactly what environment was used.
 
 * `build/build.json`
-  C backend build metadata: compiler command and file hash of `src/model.c` for traceability.
+  This the C backend build metadata : it is a compiler command and file hash of `src/model.c` for traceability.
 
-These are the **only** artefacts used in the final report; every figure or table in the report is sourced from these directories.
+The artefacts above are the **only** artefacts used in the final report; every figure or table in the report is sourced from these directories.
 
 ### Report
 
