@@ -46,7 +46,7 @@ ALL user-supplied inputs live under `configs/`; this section describes are what 
   portion_g: 85.0
 ``
 
-These YAML files are treated as **frozen inputs for grading**. The “client” can add new desserts by copying an existing file, adjusting the macros and name, and re-running the pipeline.
+These YAML files are treated as **frozen inputs for grading and testing**. The “client” can add new desserts by copying an existing file, adjusting the macros and name, and re-running the pipeline.
 
 **Everything** is derived from labels and `params.yaml`.
 
@@ -82,9 +82,9 @@ The artefacts above are the **only** artefacts used in the final report; every f
 
 ### Report
 
-The final report (5 pages + references/appendices) will be stored as:
+The final report is stored as:
 
-* `report/eng270-dessert-glycemia-report.pdf`  (path reserved for final submission)
+* `report/eng270-dessert-glycemia-report.pdf`  
 
 The report uses:
 
@@ -102,17 +102,13 @@ python run.py --reproduce --sensitivity   # refresh sensitivity table
 python -m pytest -q                       # verify minimal tests
 ```
 
-The specific mapping from report figures/tables to output files will be documented in the report itself (e.g., via a small appendix “Figure sources” table).
-
----
-
 ## Running the program
 
 ### Dependencies
 
-* **Python:** 3.11+ (tested on 3.11 and 3.12)
+* **Python:** 3.11+ (So far, tested and works on 3.11 and 3.12)
 
-* **Python packages:** pinned in `requirements.txt` (install with `pip install -r requirements.txt`).
+* **Python packages:** pinned in `requirements.txt` (as aforementionned, install with `pip install -r requirements.txt`).
   Main libraries:
 
   * `numpy` for numerical work
@@ -120,11 +116,11 @@ The specific mapping from report figures/tables to output files will be document
   * `pyyaml` for configuration
   * `pytest` for tests
 
-* **C compiler:** `gcc` or `clang` available on `PATH`. The C backend is compiled automatically on first run; no manual `make` step is required.
+* **C compiler :** `gcc` or `clang` available on `PATH`. So as to minimise commands, the C backend is automatically compiled on first run, meaning no manual `make` step is required to make the program run.
 
 #### Windows notes (MSYS2 + gcc)
 
-On Windows, the recommended route is MSYS2:
+On Windows, the recommended route to running the pipeline is MSYS2, to do so I reccommend the same steps I took :
 
 1. Install MSYS2 from the official website.
 
@@ -136,14 +132,14 @@ On Windows, the recommended route is MSYS2:
 
 3. Add `C:\msys64\mingw64\bin` to your **User PATH** (System Properties → Environment Variables).
 
-4. Open a new terminal and verify:
+4. Just in case, o a new terminal and verify:
 
    ```bash
    gcc --version
    ```
 
 After this, `python run.py --reproduce` will be able to compile `src/model.c`.
-Alternatively, a Chocolatey-managed MinGW (e.g., `choco install mingw`) can be used, as long as the compiler is on `PATH`.
+Although not personally tested, it seems that a Chocolatey-managed MinGW (e.g., `choco install mingw`) can alternitavely be used, as long as the compiler is on `PATH`.
 
 ### Build
 
