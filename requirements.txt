@@ -12,7 +12,6 @@ fonttools==4.57.0
 idna==3.10
 iniconfig==2.1.0
 ipykernel==6.29.5
-ipython==9.2.0
 ipython_pygments_lexers==1.1.1
 jedi==0.19.2
 jupyter_client==8.6.3
@@ -50,5 +49,6 @@ typing_extensions==4.13.2
 tzdata==2025.2
 urllib3==2.5.0
 wcwidth==0.2.13
+
 
 
