@@ -106,7 +106,7 @@ python -m pytest -q                       # verify minimal tests
 
 ### Dependencies
 
-* **Python:** 3.11+ (So far, tested and works on 3.11 and 3.12; on Linux/VDI use `python3` / `pip3` if `python` still points to 2.x)
+* **Python:** 3.11+ (So far, tested and works on 3.11 and 3.12; on Linux/VDI use `python3` / `pip3` if `python` still points to a variation of 2.x)
 
 * **Python packages:** pinned in `requirements.txt` (as aforementionned, install with `pip install -r requirements.txt`).
   Main libraries:
