@@ -294,7 +294,7 @@ def _clip_series(times: np.ndarray, values: np.ndarray, t_limit: float) -> Tuple
 def incremental_auc(times: np.ndarray, deltas: np.ndarray, window: float) -> float:
     clipped_times, clipped_deltas = _clip_series(times, deltas, window)
     positive = np.maximum(clipped_deltas, 0.0)
-    return float(np.trapezoid(positive, clipped_times))
+    return float(_trapezoid(positive, clipped_times)) #This line was debugged by ChatGPT
 
 
 def time_to_baseline(times: np.ndarray, glucose: np.ndarray, baseline: float, tolerance: float = 5.0) -> float:
