@@ -96,7 +96,8 @@ def map_meal_from_label(dessert: Dict[str, float], params: Dict[str, float]) -> 
     protein = float(dessert.get("protein_g", 0.0))
 
     C_avail = max(0.0, carbs - 0.5 * fiber)
-    f_fast = sugars / max(carbs, 1e-9)
+    # EDITED BY JULES (GOOGLE AI). Avoid negative slow dose if sugars > carbs.
+    f_fast = min(1.0, sugars / max(carbs, 1e-9))
     f_app = params["f_app0"] * (1.0 - params["beta_fiber_per10g"]*(fiber / 10.0))
     f_app = _clip(f_app, 0.05, 0.60)
     k_mod = 1.0 / (1.0
