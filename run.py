@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+##THE LINE ABOVE WAS RECOMMENDED BY CHATGPT########
 from __future__ import annotations
 import argparse
 import csv
