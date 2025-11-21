@@ -340,7 +340,7 @@ def compute_metrics(result: SimulationResult, params: Dict[str, float]) -> Dict[
         "time_to_baseline": t_baseline,
         "insulin_peak_time": insulin_peak_time,}
 
-
+####The following definition is a retooled function developped with the help of AI, as it explained the importance of helper functions and enclosed definitions###
 def plot_result(result: SimulationResult, params: Dict[str, float], zoom_end: float, full_end: float, out_root: Path, dpi: int) -> None:
     figures_root = out_root / "figures"
     zoom_dir = figures_root / "zoom"
@@ -374,7 +374,7 @@ def plot_result(result: SimulationResult, params: Dict[str, float], zoom_end: fl
         ax_i2.set_ylabel("Appearance / stimulus")
         lines, labels = ax_i.get_legend_handles_labels()
         lines2, labels2 = ax_i2.get_legend_handles_labels()
-        ax_i.legend(lines + lines2, labels + labels2, loc="upper left")
+        ax_i.legend(lines + lines2, labels + labels2, loc="upper right")
 
         fig.suptitle(result.name)
         fig.tight_layout()
@@ -384,7 +384,7 @@ def plot_result(result: SimulationResult, params: Dict[str, float], zoom_end: fl
 
     _plot(zoom_end, zoom_dir / f"{result.name}.png")
     _plot(full_end, full_dir / f"{result.name}.png")
-
+#####end of retooled definition####
 
 def write_summary(rows: Sequence[Tuple[str, Dict[str, float]]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -395,8 +395,7 @@ def write_summary(rows: Sequence[Tuple[str, Dict[str, float]]], path: Path) -> N
         "iAUC_0_120_mg_dL_min",
         "iAUC_0_240_mg_dL_min",
         "time_to_baseline_min",
-        "insulin_peak_time_min",
-    ]
+        "insulin_peak_time_min",]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
