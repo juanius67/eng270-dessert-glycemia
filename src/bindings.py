@@ -31,17 +31,14 @@ def _candidate_commands(output: Path) -> list[list[str]]:
     include_flag = f"-I{SRC_DIR}" if not sys.platform.startswith("win") else f"/I{SRC_DIR}"
     if sys.platform.startswith("win"):
         return [
-            [
-                "cl",
+            [ "cl",
                 "/nologo",
                 "/LD",
                 "/DBUILDING_MODEL",
                 include_flag,
                 src,
-                f"/Fe{output}",
-            ],
-            [
-                "gcc",
+                f"/Fe{output}",],
+            [ "gcc",
                 "-O3",
                 "-shared",
                 "-fPIC",
@@ -49,13 +46,9 @@ def _candidate_commands(output: Path) -> list[list[str]]:
                 include_flag,
                 src,
                 "-o",
-                str(output),
-            ],
-        ]
+                str(output), ],]
     if sys.platform == "darwin":
-        return [
-            [
-                "clang",
+        return [ ["clang",
                 "-O3",
                 "-dynamiclib",
                 "-fPIC",
@@ -63,10 +56,8 @@ def _candidate_commands(output: Path) -> list[list[str]]:
                 include_flag,
                 src,
                 "-o",
-                str(output),
-            ],
-            [
-                "gcc",
+                str(output), ],
+            [ "gcc",
                 "-O3",
                 "-dynamiclib",
                 "-fPIC",
@@ -74,12 +65,9 @@ def _candidate_commands(output: Path) -> list[list[str]]:
                 include_flag,
                 src,
                 "-o",
-                str(output),
-            ],
-        ]
+                str(output),], ]
     return [
-        [
-            "gcc",
+        ["gcc",
             "-O3",
             "-shared",
             "-fPIC",
@@ -87,10 +75,8 @@ def _candidate_commands(output: Path) -> list[list[str]]:
             include_flag,
             src,
             "-o",
-            str(output),
-        ],
-        [
-            "clang",
+            str(output),],
+        ["clang",
             "-O3",
             "-shared",
             "-fPIC",
@@ -98,9 +84,7 @@ def _candidate_commands(output: Path) -> list[list[str]]:
             include_flag,
             src,
             "-o",
-            str(output),
-        ],
-    ]
+            str(output),],]
 
 
 def _build_library() -> Path:
@@ -114,8 +98,7 @@ def _build_library() -> Path:
                 cwd=str(ROOT),
                 check=True,
                 capture_output=True,
-                text=True,
-            )
+                text=True,)
         except FileNotFoundError:
             errors.append("missing compiler: " + cmd[0])
             continue
@@ -125,13 +108,10 @@ def _build_library() -> Path:
             continue
         BUILD_METADATA.clear()
         BUILD_METADATA.update(
-            {
-                "compiler": cmd[0],
+            {"compiler": cmd[0],
                 "flags": cmd[1:],
                 "command": cmd,
-                "library": str(output),
-            }
-        )
+                "library": str(output),})
         if completed.stdout:
             BUILD_METADATA["stdout"] = completed.stdout.strip()
         if completed.stderr:
