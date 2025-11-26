@@ -226,13 +226,13 @@ The core is the classical Bergman minimal model of glucose regulation, with stat
 
 and dynamics:
 ```math
-[
+
 \begin{aligned}
 \frac{dG}{dt} &= -(S_G + X),(G - G_b) + D(t),\
 \frac{dX}{dt} &= -p_2,X + p_3,(I - I_b),\
 \frac{dI}{dt} &= -n,(I - I_b) + u(t),
 \end{aligned}
-]
+
 ```
 where (D(t)) is gut appearance and (u(t)) is insulin input.
 The C backend:
@@ -253,16 +253,19 @@ In `run.py`:
 
 2. **Fast fraction and appearance fraction**
 
-   * Fast fraction (f_\text{fast} = \text{sugars}_g / \max(\text{carbs}_g, 10^{-9})).
+   * Fast fraction:
+```math
+ (f_\text{fast} = \text{sugars}_g / \max(\text{carbs}_g, 10^{-9})).
+```
    * Base appearance fraction `f_app0` reduced by fibre via `beta_fiber_per10g`.
 
 3. **Rate modifiers from fat and fibre**
 
    A multiplicative factor:
 
-   [
+```math
    k_\text{mod} = \frac{1}{1 + \beta_\text{fat} \cdot \frac{\text{fat}*g}{10} + \beta*\text{fiber} \cdot \frac{\text{fiber}_g}{10}},
-   ]
+```
 
    scales both `k_fast0_min1` and `k_slow0_min1`.
 
@@ -270,17 +273,16 @@ In `run.py`:
 
    * Total post-hepatic (post liver) appearance dose (mg/dL·min equivalent):
 
-     [
+```math
      \text{dose}*\text{tot}
      = \left(\frac{1000,C*\text{avail}}{V_d}\right),f_\text{app},(1 - f_\text{hep}).
-     ]
-
+```
    * Dose split into fast/slow pools by (f_\text{fast}), then:
 
-     [
+```math
      A_\text{fast} = k_\text{fast} ,\text{dose}*\text{fast},\quad
      A*\text{slow} = k_\text{slow} ,\text{dose}_\text{slow}.
-     ]
+```
 
 5. **Protein-driven insulin pulse**
 
@@ -296,18 +298,26 @@ These choices are motivated by literature on gastric emptying, intestinal transp
 
 ```text
 configs/
-  ├─ params.yaml      # Physiology + appearance knobs (unit-encoded)
-  └─ frozen/          # Immutable dessert YAMLs consumed by --reproduce
-run.py                # Single CLI entry point
+  ├─ params.yaml          # Physiology + appearance knobs (unit-encoded)
+  └─ frozen/              # Immutable dessert YAMLs consumed by --reproduce
+      └─ desserts.yaml    # Nutrition labels for each dessert
+report/
+  └─ .gitkeep             # Placeholder for LaTeX report sources
 src/
-  ├─ model.c,h        # RK4 implementation of Bergman minimal model
-  └─ bindings.py      # ctypes loader + auto-build + param bridge
+  ├─ __init__.py          # Package marker (no runtime side effects)
+  ├─ model.c              # RK4 implementation of Bergman minimal model
+  ├─ model.h              # C header for BergmanParams + step()
+  ├─ bindings.py          # ctypes loader + auto-build + param bridge
+  └─ ai_infra.py          # AI-written infra: metadata, error hooks, provenance
 tests/
-  └─ test_sanity.py   # Steady-state + dt-halving checks
-requirements.txt      # numpy, matplotlib, pyyaml, pytest (pinned)
-README.md             # This file
-LICENSE               # Open-source license
-CITATION.cff          # How to cite this repository
+  ├─ test_sanity.py       # Steady-state + dt-halving checks
+  └─ .gitignore           # Ignore pytest cache and transient files
+requirements.txt          # numpy, matplotlib, pyyaml, pytest (pinned)
+README.md                 # This file
+LICENSE                   # Open-source license
+CITATION.cff              # How to cite this repository
+.gitignore                # Ignore build/, figures/, tables/, compiled libs
+
 ```
 
 Git ignores `build/`, `figures/`, `tables/`, compiled libraries, and cache directories so that the repository stays lean while all results remain regenerable.
