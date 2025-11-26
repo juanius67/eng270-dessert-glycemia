@@ -28,63 +28,86 @@ def _shared_name() -> str:
 
 def _candidate_commands(output: Path) -> list[list[str]]:
     src = str(SRC_DIR / "model.c")
-    include_flag = f"-I{SRC_DIR}" if not sys.platform.startswith("win") else f"/I{SRC_DIR}"
+
+    # Use MSVC-style /I only for cl; use -I for gcc/clang
+    include_msvc = f"/I{SRC_DIR}"
+    include_posix = f"-I{SRC_DIR}"
+
     if sys.platform.startswith("win"):
         return [
-            [ "cl",
+            [
+                "cl",
                 "/nologo",
                 "/LD",
                 "/DBUILDING_MODEL",
-                include_flag,
+                include_msvc,
                 src,
-                f"/Fe{output}",],
-            [ "gcc",
+                f"/Fe{output}",
+            ],
+            [
+                "gcc",
                 "-O3",
                 "-shared",
                 "-fPIC",
                 "-DBUILDING_MODEL",
-                include_flag,
+                include_posix,
                 src,
                 "-o",
-                str(output), ],]
+                str(output),
+            ],
+        ]
+
     if sys.platform == "darwin":
-        return [ ["clang",
+        return [
+            [
+                "clang",
                 "-O3",
                 "-dynamiclib",
                 "-fPIC",
                 "-DBUILDING_MODEL",
-                include_flag,
+                include_posix,
                 src,
                 "-o",
-                str(output), ],
-            [ "gcc",
+                str(output),
+            ],
+            [
+                "gcc",
                 "-O3",
                 "-dynamiclib",
                 "-fPIC",
                 "-DBUILDING_MODEL",
-                include_flag,
+                include_posix,
                 src,
                 "-o",
-                str(output),], ]
+                str(output),
+            ],
+        ]
+
     return [
-        ["gcc",
+        [
+            "gcc",
             "-O3",
             "-shared",
             "-fPIC",
             "-DBUILDING_MODEL",
-            include_flag,
+            include_posix,
             src,
             "-o",
-            str(output),],
-        ["clang",
+            str(output),
+        ],
+        [
+            "clang",
             "-O3",
             "-shared",
             "-fPIC",
             "-DBUILDING_MODEL",
-            include_flag,
+            include_posix,
             src,
             "-o",
-            str(output),],]
+            str(output),
+        ],
+    ]
+
 
 
 def _build_library() -> Path:
