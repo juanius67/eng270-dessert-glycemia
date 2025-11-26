@@ -95,10 +95,17 @@ To regenerate all artefacts used in the report on a fresh machine:
 
 ```bash
 pip install -r requirements.txt
-python run.py --reproduce                 # regenerate baseline figures/tables
-python run.py --reproduce --calibrate     # optional equal-amplitude comparison set
-python run.py --reproduce --sensitivity   # refresh sensitivity table
-python -m pytest -q                       # verify minimal tests
+
+# Single full pipeline: baseline + sensitivity (matches report)
+python run.py --reproduce --sensitivity
+
+# Optional: regenerate equal-amplitude calibration figures
+# (WARNING: overwrites figures/summary for the chosen outdir)
+python run.py --reproduce --calibrate
+
+# Numerical sanity tests (same C RK4 core)
+python -m pytest -q
+
 ```
 
 ## Running the program
