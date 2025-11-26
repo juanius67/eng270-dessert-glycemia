@@ -89,8 +89,7 @@ The final report is stored as:
 The report uses:
 
 * Zoom and full-horizon plots from `figures/zoom/` and `figures/full/`,
-* Summary statistics from `tables/summary.csv`,
-* Sensitivity metrics from `tables/sensitivity.csv` (optional section on nutrient perturbations).
+* Summary statistics from `tables/summary.csv`
 
 To regenerate all artefacts used in the report on a fresh machine:
 
@@ -132,14 +131,13 @@ On Windows, the recommended route to running the pipeline is MSYS2, to do so I r
 
 3. Add `C:\msys64\mingw64\bin` to your **User PATH** (System Properties → Environment Variables).
 
-4. Just in case, o a new terminal and verify:
+4. Just in case, open a new terminal and verify:
 
    ```bash
    gcc --version
    ```
 
 After this, `python run.py --reproduce` will be able to compile `src/model.c`.
-Although not personally tested, it seems that a Chocolatey-managed MinGW (e.g., `choco install mingw`) can alternitavely be used, as long as the compiler is on `PATH`.
 
 ### Build
 
@@ -147,11 +145,11 @@ No explicit manual build step is needed:
 
 * `run.py` loads `src/bindings.py`, which in turn:
 
-  * Detects whether the shared library for `model.c` exists under `build/`,
+  * Detects whether the shared (dynamic) library (built by the pipeline) for `model.c` exists under `build/`,
   * Invokes the system C compiler with the appropriate flags if not,
-  * Records the compiler command and file hash in `build/build.json`.
+  * Records the compiler command and file hash in `build/build.json` (this is done for documentation and error analysis reasons).
 
-This keeps the build process **transparent and reproducible** while staying within a single CLI entry point.
+This bulding process' structure keeps the build process **transparent and reproducible** while staying within a single CLI entry point.
 
 ### Execute
 
@@ -170,7 +168,7 @@ python run.py --reproduce --calibrate
 # Optional: ±20% perturbations of fat/fiber/protein (writes tables/sensitivity.csv)
 python run.py --reproduce --sensitivity
 
-# Quick headless smoke test (no figures, just tables + metadata)
+# Quick headless smoke test (no figures, just tables + metadata. A quick command to see if everything is up and running)
 python run.py --reproduce --summary-only --no-plots
 
 # Minimal numerical tests (steady state + dt-halving)
@@ -178,28 +176,28 @@ python -m pytest -q
 ```
 
 Flags:
+Below is a list of flags a user can use; these small modifiers change behaviour without requiring additional arguments:
 
 * `--reproduce`
-  Cleans prior outputs, rebuilds the C core if necessary, and replays every YAML in `configs/frozen/`. Produces all figures, summary tables, and build metadata.
+  Cleans prior outputs, rebuilds the C core (only if necessary), and reruns for every YAML in `configs/frozen/`. Produces all figures, summary tables, and build metadata.
 
 * `--calibrate`
-  For each dessert, recomputes appearance parameters so that **fast and slow pools have equal amplitudes at (t=0)** while:
+  For each dessert, recomputes appearance parameters so that **fast and slow pools have equal amplitudes at (t=0)** whilst preserving each pool’s decay rate all the while preserving the **total appearance dose**.
 
-  * preserving each pool’s decay rate, and
-  * preserving the **total appearance dose**.
-
-  Mathematically, amplitudes are set to
+  Mathematically, amplitudes are set to:
+  ```math
   (A_\text{eq} = \text{dose}*\text{tot} / (1/k*\text{fast} + 1/k_\text{slow})).
+  ```
   This provides a controlled “what if both pools start equally strong?” comparison.
 
 * `--sensitivity`
-  Applies factors 0.8 and 1.2 to `fat_g`, `fiber_g`, and `protein_g` for each dessert, then records the resulting peaks, timings, and iAUCs in `tables/sensitivity.csv`.
+  Applies factors 0.8 and 1.2 (±20%) to `fat_g`, `fiber_g`, and `protein_g` for each dessert, then records the resulting peaks, timings, and iAUCs in `tables/sensitivity.csv`. 
 
 * `--window {0-120,0-240,0-1440}`
-  Zoom window for the “zoom” plots.
+  Zoomed-in window for the “zoom” plots.
 
 * `--dpi DPI`
-  Plot resolution (default 150).
+  Plot resolution. The default is 150.
 
 * `--no-plots`, `--summary-only`
   Speed up runs by skipping figures and/or only writing CSV tables.
@@ -233,8 +231,8 @@ where (D(t)) is gut appearance and (u(t)) is insulin input.
 The C backend:
 
 * Stores parameters internally after a `set_params` call,
-* Integrates with a fixed-step classical RK4,
-* Exposes a `step` function bridged to Python via `ctypes`.
+* Integrates with a, fixed-step, classical RK4,
+* Makes a `step` (dt) function visible and bridged to Python via `ctypes`.
 
 ### Mapping from labels to appearance and insulin
 
@@ -263,7 +261,7 @@ In `run.py`:
 
 4. **Dose and amplitudes**
 
-   * Total post-hepatic appearance dose (mg/dL·min equivalent):
+   * Total post-hepatic (post liver) appearance dose (mg/dL·min equivalent):
 
      [
      \text{dose}*\text{tot}
@@ -283,7 +281,7 @@ In `run.py`:
    * Decay (k_\text{prot}) from `params.yaml`.
    * Stimulus (u(t) = A_\text{prot} e^{-k_\text{prot} t}).
 
-These choices are motivated by literature on gastric emptying, intestinal transport, incretin response, and protein co-ingestion.
+These choices are motivated by literature on gastric emptying, intestinal transport, incretin response, and protein co-ingestion (see report)
 
 ---
 
@@ -313,10 +311,15 @@ Git ignores `build/`, `figures/`, `tables/`, compiled libraries, and cache direc
 
 The minimal test suite is designed to reassure the client’s engineering team that the numerical implementation behaves sensibly:
 
-* `tests/test_sanity.py`:
+`tests/test_sanity.py`:
 
-  * **Fasting steady state:** no-meal simulation remains within 0.5 mg/dL (glucose) and 0.5 µU/mL (insulin) of baseline after 120 min.
-  * **Time-step convergence:** peak ΔG under a standard dessert changes by less than 1 % when `dt` is halved.
+* **Fasting steady-state test:**  
+  Runs a "no-meal" simulation and checks that glucose and insulin remain close to their baseline values after 120 min (within ±0.5 mg/dL for glucose and ±0.5 µU/mL for insulin); this reflects what should be the case in real life.
+
+* **Time-step convergence test:**  
+  Simulates a standard dessert with time-step `dt`, then repeats the simulation with `dt/2`.  
+  The test passes if the peak glucose rise (ΔG) differs by less than 1 % between the two runs.
+
 
 Run all tests with:
 
@@ -340,8 +343,9 @@ python run.py --reproduce --sensitivity
 ## Contributors
 
 * **Juan Lucas de Oliveira** — EPFL SIE student, project design, implementation, and analysis.
+* **ChatGPT / ChatGPT Codex (OpenAI)** — Used as a coding assistant for refactoring, infrastructure helpers (metadata, JSON, error handling), and documentation suggestions; all AI-generated code was reviewed, adapted over time, and cited.
+* **“Jules” (Google AI)** — Used as an auxiliary assistant for brainstorming implementation options but mostly for intensive documentation; any outputs were treated as suggestions and integrated only after human review.
 
-(If additional collaborators join, list their names and contributions here.)
 
 ---
 
@@ -349,11 +353,11 @@ python run.py --reproduce --sensitivity
 
 ### Data sources
 
-* Dessert macro data are taken from nutrition labels of commercially available products; values are encoded manually into `configs/frozen/*.yaml`.
+* Dessert macro data are taken from nutrition labels of commercially available products on OpenFoodFacts.org; values are encoded manually into `configs/frozen/*.yaml`.
 
 ### Code
 
-* Repository structure and workflow were inspired by the official ENG-270 project template (`stakahama/sie-eng270-project-template`).
+* Repository structure and workflow inspired by ENG-270 project template (`stakahama/sie-eng270-project-template`).
 * Numerical and physiological modelling draws on the literature listed in the **References** section below.
 * The project uses `numpy`, `matplotlib`, and `pyyaml`, which are cited implicitly via the Python ecosystem.
 
@@ -363,7 +367,7 @@ For citation of this repository itself, see `CITATION.cff`.
 
 ## References
 
-The modelling choices and interpretation are grounded in the following references (from the original project proposal):
+The modelling choices, constant values and interpretation are grounded in the following references (from the original project proposal):
 
 1. Marathe, C. S., Rayner, C. K., Jones, K. L., & Horowitz, M. (2013). Relationships between gastric emptying, postprandial glycemia, and incretin hormones. *Diabetes Care*, 36(5), 1396–1405.
 
