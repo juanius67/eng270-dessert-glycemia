@@ -2,7 +2,7 @@
 
 Nutrition-label–driven simulator built for ENG-270. A single Python Command Line Interface (CLI) maps dessert macronutrient labels to a dual-exponential gut appearance model and calls a C RK4 implementation of the Bergman minimal model via `ctypes`.
 
-The goal is to quantify how different dessert compositions (carbs, sugars, fibre, fat, protein) affect postprandial glucose excursions in a nominal non-diabetic adult, under a reproducible and fully scripted workflow.
+The goal is to quantify how different dessert compositions (carbs, sugars, fiber, fat, protein) affect postprandial glucose excursions in a nominal non-diabetic adult, under a reproducible and fully scripted workflow.
 
 ---
 
@@ -46,7 +46,7 @@ ALL user-supplied inputs live under `configs/`; this section describes are what 
   portion_g: 85.0
 ``
 
-These YAML files are treated as **frozen inputs for grading and testing**. The “client” can add new desserts by copying an existing file, adjusting the macros and name, and re-running the pipeline.
+These YAML files are treated as **frozen inputs for testing**. The “client” can add new desserts by copying an existing file, adjusting the macros and name, and re-running the pipeline.
 
 **Everything** is derived from labels and `params.yaml`.
 
@@ -69,7 +69,7 @@ Running the pipeline fills the set of output directories below (all ignored by g
   * return-to-baseline indicators
 
 * `tables/sensitivity.csv`
-  Written by `--sensitivity` (this command will be described later) : A table with ±20 % perturbations of fat, fibre, and protein per dessert with resulting peaks/timings/iAUCs. This is essentially a *stress test* of the model, made to test if the simulator’s predictions remain meaningful even when inputs vary, highlighting which nutrients most strongly impact glycemia.
+  Written by `--sensitivity` (this command will be described later) : A table with ±20 % perturbations of fat, fiber, and protein per dessert with resulting peaks/timings/iAUCs. This is essentially a *stress test* of the model, made to test if the simulator’s predictions remain meaningful even when inputs vary, highlighting which nutrients most strongly impact glycemia.
 
 
 * `build/env.json`
@@ -144,7 +144,7 @@ On Windows, the recommended route to running the pipeline is MSYS2, to do so I r
    gcc --version
    ```
 
-After this, `python run.py --reproduce` will be able to compile `src/model.c`.
+After this, `python run.py --reproduce` should be able to compile `src/model.c`.
 
 ### Build
 
@@ -156,7 +156,7 @@ No explicit manual build step is needed:
   * Invokes the system C compiler with the appropriate flags if not,
   * Records the compiler command and file hash in `build/build.json` (this is done for documentation and error analysis reasons).
 
-This bulding process' structure keeps the build process **transparent and reproducible** while staying within a single CLI entry point.
+All of this happens behind the run commands, so the client only ever needs to run the CLI
 
 ### Execute
 
@@ -193,7 +193,7 @@ Below is a list of flags a user can use; these small modifiers change behaviour 
 
   Mathematically, amplitudes are set to:
   ```math
-  (A_\text{eq} = \text{dose}*\text{tot} / (1/k*\text{fast} + 1/k_\text{slow})).
+  (A_\text{eq} = \text{dose}_\text{tot} / (1/k_\text{fast} + 1/k_\text{slow})).
   ```
   This provides a controlled “what if both pools start equally strong?” comparison.
 
@@ -249,7 +249,7 @@ In `run.py`:
 
    (C_\text{avail} = \max(0, \text{carbs}_g - 0.5 \cdot \text{fiber}_g))
 
-   (simple fibre discount on total carbs).
+   (simple fiber discount on total carbs).
 
 2. **Fast fraction and appearance fraction**
 
@@ -257,14 +257,14 @@ In `run.py`:
 ```math
  (f_\text{fast} = \text{sugars}_g / \max(\text{carbs}_g, 10^{-9})).
 ```
-   * Base appearance fraction `f_app0` reduced by fibre via `beta_fiber_per10g`.
+   * Base appearance fraction `f_app0` reduced by fiber via `beta_fiber_per10g`.
 
-3. **Rate modifiers from fat and fibre**
+3. **Rate modifiers from fat and fiber**
 
    A multiplicative factor:
 
 ```math
-   k_\text{mod} = \frac{1}{1 + \beta_\text{fat} \cdot \frac{\text{fat}*g}{10} + \beta*\text{fiber} \cdot \frac{\text{fiber}_g}{10}},
+   k_\text{mod} = \frac{1}{1 + \beta_\text{fat} \cdot \frac{\text{fat}*g}{10} + \beta_\text{fiber} \cdot \frac{\text{fiber}_g}{10}},
 ```
 
    scales both `k_fast0_min1` and `k_slow0_min1`.
@@ -274,14 +274,14 @@ In `run.py`:
    * Total post-hepatic (post liver) appearance dose (mg/dL·min equivalent):
 
 ```math
-     \text{dose}*\text{tot}
-     = \left(\frac{1000,C*\text{avail}}{V_d}\right),f_\text{app},(1 - f_\text{hep}).
+     \text{dose}_\text{tot}
+     = \left(\frac{1000,C_\text{avail}}{V_d}\right),f_\text{app},(1 - f_\text{hep}).
 ```
    * Dose split into fast/slow pools by (f_\text{fast}), then:
 
 ```math
-     A_\text{fast} = k_\text{fast} ,\text{dose}*\text{fast},\quad
-     A*\text{slow} = k_\text{slow} ,\text{dose}_\text{slow}.
+     A_\text{fast} = k_\text{fast} ,\text{dose}_\text{fast},\quad
+     A_\text{slow} = k_\text{slow} ,\text{dose}_\text{slow}.
 ```
 
 5. **Protein-driven insulin pulse**
