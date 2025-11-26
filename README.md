@@ -225,7 +225,7 @@ The core is the classical Bergman minimal model of glucose regulation, with stat
 * (I(t)): plasma insulin (µU/mL)
 
 and dynamics:
-
+```math
 [
 \begin{aligned}
 \frac{dG}{dt} &= -(S_G + X),(G - G_b) + D(t),\
@@ -233,7 +233,7 @@ and dynamics:
 \frac{dI}{dt} &= -n,(I - I_b) + u(t),
 \end{aligned}
 ]
-
+```
 where (D(t)) is gut appearance and (u(t)) is insulin input.
 The C backend:
 
