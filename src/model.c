@@ -78,20 +78,17 @@ EXPORT void step(double* G, double* X, double* I,
     k1_x = dt * dX;
     k1_i = dt * dI;
 
-    compute_derivatives(g + 0.5 * k1_g, x + 0.5 * k1_x, ins + 0.5 * k1_i,
-                        D, u, &dG, &dX, &dI);
+    compute_derivatives(g + 0.5 * k1_g, x + 0.5 * k1_x, ins + 0.5 * k1_i, D, u, &dG, &dX, &dI);
     k2_g = dt * dG;
     k2_x = dt * dX;
     k2_i = dt * dI;
 
-    compute_derivatives(g + 0.5 * k2_g, x + 0.5 * k2_x, ins + 0.5 * k2_i,
-                        D, u, &dG, &dX, &dI);
+    compute_derivatives(g + 0.5 * k2_g, x + 0.5 * k2_x, ins + 0.5 * k2_i, D, u, &dG, &dX, &dI);
     k3_g = dt * dG;
     k3_x = dt * dX;
     k3_i = dt * dI;
 
-    compute_derivatives(g + k3_g, x + k3_x, ins + k3_i,
-                        D, u, &dG, &dX, &dI);
+    compute_derivatives(g + k3_g, x + k3_x, ins + k3_i, D, u, &dG, &dX, &dI);
     k4_g = dt * dG;
     k4_x = dt * dX;
     k4_i = dt * dI;
