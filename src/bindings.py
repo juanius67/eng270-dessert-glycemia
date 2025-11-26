@@ -1,5 +1,5 @@
 """ctypes bindings for the Bergman minimal model RK4 core."""
-from __future__ import annotations
+from __future__ import annotations # For Python 3.7 compatibility and forward references in type hints
 
 import ctypes
 import hashlib
@@ -19,11 +19,11 @@ BUILD_METADATA: Dict[str, object] = {}
 
 
 def _shared_name() -> str:
-    if sys.platform.startswith("win"):
+    if sys.platform.startswith("win"): #windows, obviously
         return "model.dll"
-    if sys.platform == "darwin":
+    if sys.platform == "darwin": #macOS, (darwin = unix based OS)
         return "libmodel.dylib"
-    return "libmodel.so"
+    return "libmodel.so" #linux
 
 
 def _candidate_commands(output: Path) -> list[list[str]]:

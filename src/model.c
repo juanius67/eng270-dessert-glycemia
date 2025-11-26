@@ -25,16 +25,14 @@ EXPORT void set_params(BergmanParams p) {
     p3_  = p.p3;
     n_   = p.n;
     Gb_  = p.Gb;
-    Ib_  = p.Ib;
-}
+    Ib_  = p.Ib;}
 
 static void compute_derivatives(double G, double X, double I,
                                 double D, double u,
                                 double* dG, double* dX, double* dI) {
     *dG = -(S_G_ + X) * (G - Gb_) + D;
     *dX = -p2_ * X + p3_ * (I - Ib_);
-    *dI = -n_  * (I - Ib_) + u;
-}
+    *dI = -n_  * (I - Ib_) + u;}
 
 /**
  * @brief Performs a single time step of the simulation using the Runge-Kutta 4 method.
@@ -104,5 +102,4 @@ EXPORT void step(double* G, double* X, double* I,
 
     *G = g;
     *X = x;
-    *I = ins;
-}
+    *I = ins;}
