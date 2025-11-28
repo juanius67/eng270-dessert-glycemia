@@ -359,9 +359,9 @@ python run.py --reproduce --sensitivity
 
 ## Contributors
 
-* **Juan Lucas de Oliveira** — EPFL SIE student, project design, implementation, and analysis.
-* **ChatGPT / ChatGPT Codex (OpenAI)** — Used as a coding assistant for refactoring, infrastructure helpers (metadata, JSON, error handling), and documentation suggestions; all AI-generated code was reviewed, adapted over time, and cited.
-* **“Jules” (Google AI)** — Used as an auxiliary assistant for brainstorming implementation options but mostly for intensive documentation; any outputs were treated as suggestions and integrated only after human review.
+* **Juan Lucas de Oliveira**
+* **ChatGPT / ChatGPT Codex 5.0 & 5.1  (OpenAI)** — Used as a coding assistant for refactoring, infrastructure helpers (metadata, JSON, error handling), and documentation suggestions; all AI-generated code was reviewed, adapted over time, and cited.
+* **“Jules” (Google AI) (Gemini 3.0)** — Used as an auxiliary assistant for brainstorming implementation options but mostly for intensive documentation; any outputs were treated as suggestions and integrated only after **human** review.
 
 
 ---
