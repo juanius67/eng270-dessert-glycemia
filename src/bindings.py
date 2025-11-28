@@ -11,7 +11,7 @@ from ctypes import POINTER, Structure, c_double
 from pathlib import Path
 from typing import Dict, Optional
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1] # Project root directory
 SRC_DIR = ROOT / "src"
 BUILD_DIR = ROOT / "build"
 
@@ -29,7 +29,7 @@ def _shared_name() -> str:
 def _candidate_commands(output: Path) -> list[list[str]]:
     src = str(SRC_DIR / "model.c")
 
-    # Use MSVC-style /I only for cl; use -I for gcc/clang
+    # Ensuring use of MSVC-style /I only for cl; use -I for gcc/clang
     include_msvc = f"/I{SRC_DIR}"
     include_posix = f"-I{SRC_DIR}"
 
@@ -42,8 +42,7 @@ def _candidate_commands(output: Path) -> list[list[str]]:
                 "/DBUILDING_MODEL",
                 include_msvc,
                 src,
-                f"/Fe{output}",
-            ],
+                f"/Fe{output}",],
             [
                 "gcc",
                 "-O3",
@@ -53,11 +52,9 @@ def _candidate_commands(output: Path) -> list[list[str]]:
                 include_posix,
                 src,
                 "-o",
-                str(output),
-            ],
-        ]
+                str(output),],]
 
-    if sys.platform == "darwin":
+    if sys.platform == "darwin": #macOS
         return [
             [
                 "clang",
@@ -68,8 +65,7 @@ def _candidate_commands(output: Path) -> list[list[str]]:
                 include_posix,
                 src,
                 "-o",
-                str(output),
-            ],
+                str(output),],
             [
                 "gcc",
                 "-O3",
@@ -79,9 +75,7 @@ def _candidate_commands(output: Path) -> list[list[str]]:
                 include_posix,
                 src,
                 "-o",
-                str(output),
-            ],
-        ]
+                str(output),],]
 
     return [
         [
@@ -93,8 +87,7 @@ def _candidate_commands(output: Path) -> list[list[str]]:
             include_posix,
             src,
             "-o",
-            str(output),
-        ],
+            str(output),],
         [
             "clang",
             "-O3",
@@ -104,16 +97,14 @@ def _candidate_commands(output: Path) -> list[list[str]]:
             include_posix,
             src,
             "-o",
-            str(output),
-        ],
-    ]
+            str(output),],]
 
 
 
 def _build_library() -> Path:
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     output = BUILD_DIR / _shared_name()
-    errors: list[str] = []
+    errors: list[str] = [] #all error handling was developped by AI (Gemini 3.0) so as to ensure proper reporting of compilation issues
     for cmd in _candidate_commands(output):
         try:
             completed = subprocess.run(
@@ -204,8 +195,7 @@ class BergmanParams(Structure):
         ("p3", c_double),
         ("n", c_double),
         ("Gb", c_double),
-        ("Ib", c_double),
-    ]
+        ("Ib", c_double),]
 
 
 lib: Optional[ctypes.CDLL] = _load_library()
@@ -221,8 +211,7 @@ if lib is not None:
         c_double,
         c_double,
         c_double,
-        c_double,
-    ]
+        c_double,]
     lib.step.restype = None
 
 
@@ -282,3 +271,19 @@ def get_build_metadata() -> Dict[str, object]:
     metadata["platform"] = platform.platform()
     metadata["python"] = sys.version
     return metadata
+
+# BELOW IS AN AI (Gemini 3.0) GENERATED FUNCTION THAT FIXES A WINDOWS-ONLY ISSUE WITH REBUILDING THE C LIBRARY (SOMETHING ENCOUNTERED WHILE TESTING)
+
+def unload_c_lib() -> None:
+    """Forcefully unloads the C library (Windows workaround for rebuilding)."""
+    global lib
+    # Only necessary on Windows where open files cannot be deleted
+    if lib is not None and platform.system() == "Windows":
+        import _ctypes
+        while True:
+            try:
+                # Decrement ref count until it's actually released
+                _ctypes.FreeLibrary(lib._handle)
+            except Exception:
+                break
+    lib = None
