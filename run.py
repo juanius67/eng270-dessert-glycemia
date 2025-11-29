@@ -25,7 +25,7 @@ from src import bindings
 from src.ai_infra import collect_env_metadata, write_json  # WRITTEN BY AI
 from src.bindings import get_build_metadata, set_params_from_dict
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent #resolve() used to get absolute path, makes the code work better in my experience
 CONFIGS_DIR = ROOT/"configs"
 FROZEN_DIR = CONFIGS_DIR/"frozen"
 DEFAULT_PARAMS_PATH = CONFIGS_DIR/"params.yaml"
