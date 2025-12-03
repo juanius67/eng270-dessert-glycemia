@@ -2,7 +2,7 @@
 
 Nutrition-label–driven simulator built for ENG-270. A single Python Command Line Interface (CLI) maps dessert macronutrient labels to a dual-exponential gut appearance model and calls a C RK4 implementation of the Bergman minimal model via `ctypes`.
 
-The goal is to quantify how different dessert compositions (carbs, sugars, fiber, fat, protein) affect postprandial glucose excursions in a nominal non-diabetic adult, under a reproducible and fully scripted workflow.
+The goal is to quantify how different dessert compositions (carbs, sugars, fiber, fat, protein) affect postprandial glucose excursions in a nominal, non-diabetic adult, under a reproducible and fully scripted workflow.
 
 ---
 
@@ -44,7 +44,7 @@ ALL user-supplied inputs live under `configs/`; this section describes are what 
   fat_g: 12.0
   protein_g: 4.0
   portion_g: 85.0
-``
+
 
 These YAML files are treated as **frozen inputs for testing**. The “client” can add new desserts by copying an existing file, adjusting the macros and name, and re-running the pipeline.
 
@@ -52,7 +52,7 @@ These YAML files are treated as **frozen inputs for testing**. The “client” 
 
 ### Output files (“results”)
 
-Running the pipeline fills the set of output directories below (all ignored by git so as to not upload junk) :
+Running the pipeline creates and fills the set of output directories below :
 
 * `figures/zoom/`
   All figures with a time window of 0–240 min : overlays of glucose, insulin, and gut appearance for each dessert.
@@ -72,19 +72,19 @@ Running the pipeline fills the set of output directories below (all ignored by g
   Written by `--sensitivity` (this command will be described later) : A table with ±20 % perturbations of fat, fiber, and protein per dessert with resulting peaks/timings/iAUCs. This is essentially a *stress test* of the model, made to test if the simulator’s predictions remain meaningful even when inputs vary, highlighting which nutrients most strongly impact glycemia.
 
 
-* `build/env.json`
+* `build/env.json` 
   Here lies the environment metadata : Python version, NumPy version, OS, etc. Moreso used for bookkeeping than anything else; having this ensures that anyone reproducing results knows exactly what environment was used.
 
 * `build/build.json`
   This the C backend build metadata : it is a compiler command and file hash of `src/model.c` for traceability.
 
-The artefacts above are the **only** artefacts used in the final report; every figure or table in the report is sourced from these directories.
+Except for the two json files created through AI-generated commands for bookkeeping and cross-referencing across devices, the artefacts above are the **only** artefacts used in the final report; every figure or table in the report is sourced from these directories.
 
 ### Report
 
 The final report is stored as:
 
-* `report/eng270-dessert-glycemia-report.pdf`  
+* `report/Juan_Lucas_de_Oliveira-ENG-270_Project_Report.pdf`  
 
 The report uses:
 
@@ -112,7 +112,7 @@ python -m pytest -q
 
 ### Dependencies
 
-* **Python:** 3.11+ (So far, tested and works on 3.11 and 3.12; on Linux/VDI use `python3` / `pip3` and `python3 -m pip` for all commands if `python` still points to a variation of 2.x)
+* **Python:** 3.11+ (So far, tested and works on 3.11 and 3.12; on Linux/VDI use `python3` / `pip3` and `python3 -m pip` for all commands if `python` still points to a variation of 2."x")
 
 * **Python packages:** pinned in `requirements.txt` (as aforementionned, install with `pip install -r requirements.txt`).
   Main libraries:
@@ -126,7 +126,7 @@ python -m pytest -q
 
 #### Windows notes (MSYS2 + gcc)
 
-On Windows, the recommended route to running the pipeline is MSYS2, to do so I reccommend the same steps I took :
+On Windows, the recommended route to running the pipeline is MSYS2, to do so I reccommend the same steps I took on my personal machine (ARM CPU Windows Laptop) :
 
 1. Install MSYS2 from the official website.
 
@@ -214,14 +214,14 @@ Below is a list of flags a user can use; these small modifiers change behaviour 
 
 ---
 
-## Model overview (for the engineering team)
+## Model overview 
 
 ### Bergman minimal model
 
 The core is the classical Bergman minimal model of glucose regulation, with state variables:
 
 * (G(t)): plasma glucose (mg/dL)
-* (X(t)): “remote” insulin effect
+* (X(t)): "remote" insulin effect
 * (I(t)): plasma insulin (µU/mL)
 
 and dynamics:
@@ -294,31 +294,6 @@ These choices are motivated by literature on gastric emptying, intestinal transp
 
 ---
 
-## Repository layout
-
-```text
-configs/
-  ├─ params.yaml          # Physiology + appearance knobs (unit-encoded)
-  └─ frozen/              # Immutable dessert YAMLs consumed by --reproduce
-      └─ desserts.yaml    # Nutrition labels for each dessert
-report/
-  └─ .gitkeep             # Placeholder for LaTeX report sources
-src/
-  ├─ __init__.py          # Package marker (no runtime side effects)
-  ├─ model.c              # RK4 implementation of Bergman minimal model
-  ├─ model.h              # C header for BergmanParams + step()
-  ├─ bindings.py          # ctypes loader + auto-build + param bridge
-  └─ ai_infra.py          # AI-written infra: metadata, error hooks, provenance
-tests/
-  ├─ test_sanity.py       # Steady-state + dt-halving checks
-  └─ .gitignore           # Ignore pytest cache and transient files
-requirements.txt          # numpy, matplotlib, pyyaml, pytest (pinned)
-README.md                 # This file
-LICENSE                   # Open-source license
-CITATION.cff              # How to cite this repository
-.gitignore                # Ignore build/, figures/, tables/, compiled libs
-
-```
 
 Git ignores `build/`, `figures/`, `tables/`, compiled libraries, and cache directories so that the repository stays lean while all results remain regenerable.
 
@@ -360,6 +335,7 @@ python run.py --reproduce --sensitivity
 ## Contributors
 
 * **Juan Lucas de Oliveira**
+### AI Agents:
 * **ChatGPT / ChatGPT Codex 5.0 & 5.1  (OpenAI)** — Used as a coding assistant for refactoring, infrastructure helpers (metadata, JSON, error handling), and documentation suggestions; all AI-generated code was reviewed, adapted over time, and cited.
 * **“Jules” (Google AI) (Gemini 3.0)** — Used as an auxiliary assistant for brainstorming implementation options but mostly for intensive documentation; any outputs were treated as suggestions and integrated only after **human** review.
 
@@ -374,11 +350,9 @@ python run.py --reproduce --sensitivity
 
 ### Code
 
-* Repository structure and workflow inspired by ENG-270 project template (`stakahama/sie-eng270-project-template`).
 * Numerical and physiological modelling draws on the literature listed in the **References** section below.
 * The project uses `numpy`, `matplotlib`, and `pyyaml`, which are cited implicitly via the Python ecosystem.
 
-For citation of this repository itself, see `CITATION.cff`.
 
 ---
 
