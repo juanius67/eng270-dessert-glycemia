@@ -467,15 +467,19 @@ def compute_metrics(result: SimulationResult, params: Dict[str, float]) -> Dict[
         dt_left = result.times[peak_idx] - result.times[peak_idx - 1]
         dt_right = result.times[peak_idx + 1] - result.times[peak_idx]
         if dt_left > 0 and dt_right > 0 and math.isclose(dt_left, dt_right, rel_tol=1e-9, abs_tol=1e-9):
+            # EDITED BY JULES (GOOGLE AI). REASON: Explaining the parabolic interpolation.
+            # Refine peak estimation using parabolic interpolation (Newton's difference quotient).
+            # We fit a parabola through the max point and its neighbors to find the analytic vertex.
+            # This is done manually to avoid heavy dependencies (like SciPy) for a single function.
             y_prev = delta[peak_idx - 1]
             y_curr = delta[peak_idx]
             y_next = delta[peak_idx + 1]
-            denom = y_prev - 2.0 * y_curr + y_next
+            denom = y_prev - 2.0 * y_curr + y_next  # Proportional to 2nd derivative (finite difference)
             if abs(denom) > 1e-12:
-                offset = 0.5 * (y_prev - y_next) / denom
+                offset = 0.5 * (y_prev - y_next) / denom  # Vertex x-offset relative to peak_idx
                 dt_avg = 0.5 * (dt_left + dt_right)
                 t_peak = float(result.times[peak_idx] + offset * dt_avg)
-                peak_delta = float(y_curr - 0.25 * (y_prev - y_next) * offset)
+                peak_delta = float(y_curr - 0.25 * (y_prev - y_next) * offset)  # Vertex y-value
     iauc_120 = incremental_auc(result.times, delta, 120.0)
     iauc_240 = incremental_auc(result.times, delta, 240.0)
     t_baseline = time_to_baseline(result.times, result.glucose, Gb)
