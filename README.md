@@ -335,7 +335,8 @@ python run.py --reproduce --sensitivity
 ## Contributors
 
 * **Juan Lucas de Oliveira**
-### AI Agents:
+
+### AI Agents and thier uses:
 * **ChatGPT / ChatGPT Codex 5.0 & 5.1  (OpenAI)** — Used as a coding assistant for refactoring, infrastructure helpers (metadata, JSON, error handling), and documentation suggestions; all AI-generated code was reviewed, adapted over time, and cited.
 * **“Jules” (Google AI) (Gemini 3.0)** — Used as an auxiliary assistant for brainstorming implementation options but mostly for intensive documentation; any outputs were treated as suggestions and integrated only after **human** review.
 
@@ -358,28 +359,35 @@ python run.py --reproduce --sensitivity
 
 ## References
 
-The modelling choices, constant values and interpretation are grounded in the following references (from the original project proposal):
+The modelling choices, constant values and interpretation are grounded in the following references (some from the original project proposal):
 
-1. Marathe, C. S., Rayner, C. K., Jones, K. L., & Horowitz, M. (2013). Relationships between gastric emptying, postprandial glycemia, and incretin hormones. *Diabetes Care*, 36(5), 1396–1405.
+[1] Michael Bergman. The 1-Hour Plasma Glucose: Common Link Across the Glycemic Spectrum. Frontiers in Endocrinology, 12, September 2021. ISSN 1664-2392. doi: 10.3389/fendo.2021.752329. URL https://www.frontiersin.org/journals/endocrinology/articles/10.3389/fendo.2021.752329/full. Publisher: Frontiers.
 
-2. Koepsell, H. (2020). Glucose transporters in the small intestine in health and disease. *Pflügers Archiv – European Journal of Physiology*, 472(9), 1207–1248.
+[2] Richard N. Bergman. Origins and History of the Minimal Model of Glucose Regulation. Frontiers in Endocrinology, 11:583016, February 2021. ISSN 1664-2392. doi: 10.3389/fendo.2020.583016. URL https://pmc.ncbi.nlm.nih.gov/articles/PMC7917251/.
 
-3. Park, S. Y., Gautier, J.-F., & Chon, S. (2021). Assessment of insulin secretion and insulin resistance in humans. *Diabetes & Metabolism Journal*, 45(5), 641–654.
+[3] R. N. Bergman, Y. Z. Ider, C. R. Bowden, and C. Cobelli. Quantitative estimation of insulin sensitivity. The American Journal of Physiology, 236(6):E667–677, June 1979. ISSN 0002-9513. doi: 10.1152/ajpendo.1979.236.6.E667.
 
-4. Bergman, R. N. (2021). Origins and history of the minimal model of glucose regulation. *Frontiers in Endocrinology*, 11, 583016.
+[4] Michael Camilleri. Integrated Upper Gastrointestinal Response to Food Intake. Gastroenterology, 131(2):640–658, August 2006. ISSN 0016-5085, 1528-0012. doi: 10.1053/j.gastro.2006.03.023. URL https://www.gastrojournal.org/article/S0016-5085(06)00572-5/fulltext. Publisher: Elsevier.
 
-5. Bergman, R. N., Ider, Y. Z., Bowden, C. R., & Cobelli, C. (1979). Quantitative estimation of insulin sensitivity. *American Journal of Physiology*, 236(6), E667–E677.
+[5] Claudio Cobelli, Chiara Dalla Man, Giovanni Sparacino, Lalo Magni, Giuseppe De Nicolao, and Boris P. Kovatchev. Diabetes: Models, Signals, and Control. IEEE reviews in biomedical engineering, 2:54–96, January 2009. ISSN 1937-3333. doi: 10.1109/RBME.2009.2036073. URL https://pmc.ncbi.nlm.nih.gov/articles/PMC2951686/.
 
-6. Bergman, M. (2021). The 1-hour plasma glucose: Common link across the glycemic spectrum. *Frontiers in Endocrinology*, 12, 1–9.
+[6] Anders H. Frid, Mikael Nilsson, Jens Juul Holst, and Inger ME Björck. Effect of whey on blood glucose and insulin responses to composite breakfast and lunch meals in type 2 diabetic subjects. The American Journal of Clinical Nutrition, 82(1):69–75, July 2005. ISSN 0002-9165. doi: 10.1093/ajcn/82.1.69. URL https://www.sciencedirect.com/science/article/pii/S0002916523295118.
 
-7. Cobelli, C., Dalla Man, C., Sparacino, G., Magni, L., De Nicolao, G., & Kovatchev, B. P. (2009). Diabetes: Models, signals, and control. *IEEE Reviews in Biomedical Engineering*, 2, 54–96.
+[7] Hermann Koepsell. Glucose transporters in the small intestine in health and disease. Pflugers Archiv, 472(9):1207–1248, 2020. ISSN 0031-6768. doi: 10.1007/s00424-020-02439-5. URL https://pmc.ncbi.nlm.nih.gov/articles/PMC7462918/.
 
-8. Taylor, P. N., Collins, K. S., Lam, A., et al. (2023). C-peptide and metabolic outcomes in trials of disease-modifying therapy in new-onset type 1 diabetes: An individual participant meta-analysis. *The Lancet Diabetes & Endocrinology*, 11(12), 915–925.
+[8] Chinmay S. Marathe, Christopher K. Rayner, Karen L. Jones, and Michael Horowitz. Relationships between gastric emptying, postprandial glycemia, and incretin hormones. Diabetes Care, 36(5):1396–1405, May 2013. ISSN 1935-5548. doi: 10.2337/dc12-1609.
 
-9. Slavin, J. (2013). Fiber and prebiotics: Mechanisms and health benefits. *Nutrients*, 5(4), 1417–1435.
+[9] So Young Park, Jean-François Gautier, and Suk Chon. Assessment of Insulin Secretion and Insulin Resistance in Human. Diabetes & Metabolism Journal, 45(5):641–654, September 2021. ISSN 2233-6087. doi: 10.4093/dmj.2021.0220.
 
-10. Camilleri, M. (2006). Integrated upper gastrointestinal response to food intake. *Gastroenterology*, 131(2), 640–658.
+[10] Joanne Slavin. Fiber and Prebiotics: Mechanisms and Health Benefits. Nutrients, 5(4):1417–1435, April 2013. ISSN 2072-6643. doi: 10.3390/nu5041417. URL https://www.mdpi.com/2072-6643/5/4/1417. Publisher: Multidisciplinary Digital Publishing Institute.
 
-11. Frid, A. H., Nilsson, M., Holst, J. J., & Björck, I. M. E. (2005). Effect of whey on blood glucose and insulin responses to composite meals in type 2 diabetic subjects. *American Journal of Clinical Nutrition*, 82(1), 69–75.
+[11] Peter N. Taylor, Kimberly S. Collins, Anna Lam, Stephen R. Karpen, Brianna Greeno, Frank Walker, Alejandro Lozano, Elnaz Atabakhsh, Simi T. Ahmed, Marjana Marinac, Esther Latres, Peter A. Senior, Mark Rigby, Peter A. Gottlieb, Colin M. Dayan, and Trial Outcome Markers Initiative collaboration. C-peptide and metabolic outcomes in trials of disease modifying therapy in new-onset type 1 diabetes: an individual participant meta-analysis. The Lancet. Diabetes & Endocrinology, 11(12):915–925, December 2023. ISSN 2213-8595. doi: 10.1016/S2213-8587(23)00267-X.
 
-```
+[12] Acai berry bowl. Open Food Facts. URL https://world.openfoodfacts.org/product/9120054751695/acai-berry-bowl. [Accessed: 2025-11-29].
+
+[13] Alfajor super dulce de leche – Havanna – 70 g. Open Food Facts. May 2024. URL https://world.openfoodfacts.org/product/7791875101598/alfajor-super-dulce-de-leche-havanna. [Accessed: 2025-11-29].
+
+[14] Brigadeiro. Open Food Facts. July 2024. URL https://world.openfoodfacts.org/product/7896434920662/brigadeiro. [Accessed: 2025-11-29].
+
+[15] Chocotorta – Arcor – 53 g. Open Food Facts. September 2025. URL https://world.openfoodfacts.org/product/7790580142179/chocotorta-arcor. [Accessed: 2025-11-29].
+
