@@ -352,7 +352,7 @@ python run.py --reproduce --sensitivity
 ### Code
 
 * Numerical and physiological modelling draws on the literature listed in the **References** section below.
-* The project uses `numpy`, `matplotlib`, and `pyyaml`, which are cited implicitly via the Python ecosystem.
+* The project uses `numpy`, `matplotlib`, and `pyyaml`.
 
 
 ---
