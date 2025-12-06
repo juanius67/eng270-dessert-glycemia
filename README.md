@@ -59,6 +59,9 @@ Running the pipeline creates and fills the set of output directories below :
 
 * `figures/full/`
   All figures with full-day (0–1440 min) overlays, used for long-time-horizon comparisons.
+  
+* `figures/summary_dashboard.png`
+A consolidated bar-chart strip comparing Peak G, iAUC, and Timings across all desserts side-by-side.
 
 * `tables/summary.csv`
   CSV tables with one row per dessert with key metrics, for example :
